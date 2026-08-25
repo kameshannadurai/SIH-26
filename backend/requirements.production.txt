@@ -1,0 +1,4 @@
+-r requirements.txt
+alembic==1.16.5
+pytest==8.3.5
+httpx2

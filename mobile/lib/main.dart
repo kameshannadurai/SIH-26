@@ -1,0 +1,5 @@
+import 'package:flutter/material.dart';
+void main() => runApp(const FieldApp());
+class FieldApp extends StatelessWidget { const FieldApp({super.key}); @override Widget build(BuildContext c)=>MaterialApp(title:'LM Field',theme:ThemeData(colorSchemeSeed:Colors.blue),home:const TasksPage()); }
+class TasksPage extends StatefulWidget { const TasksPage({super.key}); @override State<TasksPage> createState()=>_TasksPageState(); }
+class _TasksPageState extends State<TasksPage> { final List<String> offlineQueue=[]; @override Widget build(BuildContext c)=>Scaffold(appBar:AppBar(title:const Text('Assigned inspections')),body:offlineQueue.isEmpty?const Center(child:Text('No cached assignments. Sync when online.')):ListView(children:offlineQueue.map((x)=>ListTile(title:Text(x),subtitle:const Text('Pending sync'))).toList()),floatingActionButton:FloatingActionButton.extended(onPressed:()=>setState(()=>offlineQueue.add('Draft verification ${DateTime.now()}')),label:const Text('Offline draft'),icon:const Icon(Icons.add_a_photo))); }
