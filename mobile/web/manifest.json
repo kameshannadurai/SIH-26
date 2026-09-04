@@ -1,0 +1,11 @@
+{
+  "name": "Legal Metrology Field Verification",
+  "short_name": "LM Field",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0B559F",
+  "theme_color": "#0B559F",
+  "description": "Offline-first field verification client",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false
+}

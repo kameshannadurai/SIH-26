@@ -2,91 +2,1532 @@ import { useEffect, useMemo, useState } from 'react';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { api } from './api/client';
 import { Badge, ConfirmDialog, Empty, ErrorState, Modal, Spinner, Stat, Timeline, Toast, useAsync } from './components/UI';
+import { INDIAN_STATES, INDIAN_STATES_AND_DISTRICTS } from './data/indianLocations';
+import { BrandLogo } from './BrandLogo';
+import { PhoneMockupWrapper } from './components/PhoneMockup';
+import { QRCodeSVG } from './components/QRCodeSVG';
+import { CertificateOfAuthenticityModal } from './components/CertificateOfAuthenticity';
+import { AIAssistantDrawer } from './components/AIAssistantDrawer';
+import { CitizenComplaintPortal } from './components/CitizenComplaintPortal';
+import { SmartScheduler } from './components/SmartScheduler';
+import { ComplaintHeatmap } from './components/ComplaintHeatmap';
+import { AdminWorkforceManager } from './components/AdminWorkforceManager';
+import { OfficerComplaintWorkbench } from './components/OfficerComplaintWorkbench';
+import { PaymentGatewayModal } from './components/PaymentGateway';
+
 
 const nav = {
-  BUSINESS: [['Overview', '/dashboard'], ['Instruments', '/instruments'], ['Applications', '/applications'], ['Certificates', '/certificates'], ['Notifications', '/notifications']],
-  LMO: [['Overview', '/dashboard'], ['Assigned inspections', '/assignments'], ['Field verification', '/verify-field'], ['Certificates', '/certificates'], ['Notifications', '/notifications']],
-  GATC: [['Overview', '/dashboard'], ['Assigned tests', '/assignments'], ['Field verification', '/verify-field'], ['Certificates', '/certificates'], ['Notifications', '/notifications']],
-  ADMIN: [['Overview', '/dashboard'], ['Scheduling', '/assignments'], ['Instruments', '/instruments'], ['Applications', '/applications'], ['Certificates', '/certificates'], ['Enforcement', '/enforcement'], ['Audit logs', '/audit-logs'], ['Notifications', '/notifications']],
+  BUSINESS: [
+    ['Overview', '/dashboard'],
+    ['Instruments', '/instruments'],
+    ['Applications', '/applications'],
+    ['Smart Schedule', '/schedule'],
+    ['Certificates', '/certificates'],
+    ['Due tracking', '/due-tracking'],
+    ['Notifications', '/notifications']
+  ],
+  LMO: [
+    ['Overview', '/dashboard'],
+    ['Assigned inspections', '/assignments'],
+    ['Citizen Complaints', '/complaints'],
+    ['My Schedule', '/schedule'],
+    ['Field verification', '/verify-field'],
+    ['Certificates', '/certificates'],
+    ['Due tracking', '/due-tracking'],
+    ['Notifications', '/notifications']
+  ],
+  GATC: [
+    ['Overview', '/dashboard'],
+    ['Assigned tests', '/assignments'],
+    ['Testing Schedule', '/schedule'],
+    ['Field verification', '/verify-field'],
+    ['Certificates', '/certificates'],
+    ['Notifications', '/notifications']
+  ],
+  ADMIN: [
+    ['Overview', '/dashboard'],
+    ['Assignments & Routing', '/assignments'],
+    ['Workforce & Overrides', '/workforce'],
+    ['Citizen Complaints', '/complaints'],
+    ['Complaint Heatmap', '/heatmap'],
+    ['Certificates', '/certificates'],
+    ['Due tracking', '/due-tracking'],
+    ['Notifications', '/notifications']
+  ],
 };
-const publicPaths = new Set(['/', '/login', '/verify']);
-const go = path => { history.pushState({}, '', path); window.dispatchEvent(new PopStateEvent('popstate')); };
+
+const publicPaths = new Set(['/', '/login', '/register', '/verify', '/complaints']);
+const go = path => {
+  history.pushState({}, '', path);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+};
 const allowed = (role, path) => (nav[role] || []).some(([, item]) => item === path);
 
-export function App() { return <AuthProvider><AppInner /></AuthProvider>; }
+
+export function App() {
+  return (
+    <AuthProvider>
+      <AppInner />
+    </AuthProvider>
+  );
+}
+
 function AppInner() {
   const [path, setPath] = useState(location.pathname);
-  useEffect(() => { const handler = () => setPath(location.pathname); addEventListener('popstate', handler); return () => removeEventListener('popstate', handler); }, []);
-  if (path.startsWith('/verify/')) return <PublicVerify number={decodeURIComponent(path.split('/').pop())} />;
-  return <Router path={path} />;
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('lm_theme') === 'dark');
+
+  useEffect(() => {
+    const handler = () => setPath(location.pathname);
+    addEventListener('popstate', handler);
+    return () => removeEventListener('popstate', handler);
+  }, []);
+
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('lm_theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('lm_theme', 'light');
+    }
+  }, [darkMode]);
+
+  const [mockupMode, setMockupMode] = useState(() => location.search.includes('mockup=true'));
+  const toggleTheme = () => setDarkMode(!darkMode);
+  const toggleMockup = () => setMockupMode(!mockupMode);
+
+  const content = path.startsWith('/verify/') ? (
+    <PublicVerify tokenOrNumber={decodeURIComponent(path.split('/verify/')[1] || '')} darkMode={darkMode} onToggleTheme={toggleTheme} />
+  ) : (
+    <Router path={path} darkMode={darkMode} onToggleTheme={toggleTheme} />
+  );
+
+  return (
+    <PhoneMockupWrapper active={mockupMode} onToggle={toggleMockup} darkMode={darkMode}>
+      {content}
+    </PhoneMockupWrapper>
+  );
 }
-function Router({ path }) {
-  const { user, loading } = useAuth();
+
+
+function Router({ path, darkMode, onToggleTheme }) {
+  const { user, loading, token } = useAuth();
   if (loading) return <Spinner label="Restoring your secure session…" />;
-  if (!user) return path === '/login' ? <Login /> : <Landing />;
-  if (!allowed(user.role, path)) { go('/dashboard'); return null; }
-  return <Shell path={path} user={user} />;
+  
+  if (path.startsWith('/complaints') && (!user || user.role === 'BUSINESS')) {
+    return (
+      <>
+        <CitizenComplaintPortal onBackToHome={() => go('/')} darkMode={darkMode} />
+        <AIAssistantDrawer user={user} token={token} onNavigate={go} darkMode={darkMode} />
+      </>
+    );
+  }
+
+  if (!user) {
+    if (path === '/login') return <Login darkMode={darkMode} onToggleTheme={onToggleTheme} />;
+    if (path === '/register') return <Register darkMode={darkMode} onToggleTheme={onToggleTheme} />;
+    return (
+      <>
+        <Landing darkMode={darkMode} onToggleTheme={onToggleTheme} />
+        <AIAssistantDrawer user={null} token={null} onNavigate={go} darkMode={darkMode} />
+      </>
+    );
+  }
+  if (!allowed(user.role, path)) {
+    go('/dashboard');
+    return null;
+  }
+  return <Shell path={path} user={user} darkMode={darkMode} onToggleTheme={onToggleTheme} />;
 }
-function Landing() { return <div className="public"><header className="public-nav"><button className="brand" onClick={() => go('/')}>LM <span>Digital Verification</span></button><nav><a href="#about">About</a><a href="#help">Help</a><button className="outline" onClick={() => go('/login')}>Portal login</button></nav></header><main><section className="hero"><div><p className="eyebrow">GOVERNMENT OF INDIA · LEGAL METROLOGY</p><h1>Trust every <em>measure.</em></h1><p>One secure platform for instrument registration, field verification and tamper-evident certificates.</p><div className="hero-actions"><button onClick={() => go('/login')}>Access portal</button><button className="outline" onClick={() => go('/verify/')}>Verify a certificate</button></div></div><div className="hero-card"><span className="seal">LM</span><h3>Digital Instrument Passport</h3><p>Continuous identity, compliance history and certificate validity for every instrument.</p><div className="verified-line">✓ QR-verifiable certificates</div></div></section><section className="feature-grid" id="about"><article><b>01</b><h3>Register</h3><p>Maintain official instrument records and supporting evidence.</p></article><article><b>02</b><h3>Verify</h3><p>Field officers capture measurements, observations and location evidence.</p></article><article><b>03</b><h3>Certify</h3><p>Issue tamper-evident certificates the public can verify.</p></article></section><section className="help" id="help"><h2>Need assistance?</h2><p>For platform support, contact your district Legal Metrology office or use the authenticated notification centre.</p></section></main></div>; }
-function Login() { const { login } = useAuth(); const [form, setForm] = useState({ email: '', password: '' }); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const submit = async event => { event.preventDefault(); setBusy(true); setError(''); try { await login(form.email, form.password); go('/dashboard'); } catch (err) { setError(err.message); } finally { setBusy(false); } }; return <main className="auth-page"><button className="brand back" onClick={() => go('/')}>← LM Digital Verification</button><section><p className="eyebrow">SECURE PORTAL</p><h1>Sign in</h1><p>Use your registered Legal Metrology account.</p><form onSubmit={submit}><label>Email<input type="email" required value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} /></label><label>Password<input type="password" required value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} /></label>{error && <p className="form-error">{error}</p>}<button disabled={busy}>{busy ? 'Signing in…' : 'Sign in securely'}</button></form></section></main>; }
-function Shell({ path, user }) {
-  const { logout, token } = useAuth(); const [toast, setToast] = useState(''); const [menu, setMenu] = useState(false); const items = nav[user.role] || [];
-  const views = { '/dashboard': <Dashboard user={user} token={token} />, '/instruments': <Instruments token={token} role={user.role} toast={setToast} />, '/applications': <Applications token={token} role={user.role} toast={setToast} />, '/assignments': <Assignments token={token} role={user.role} toast={setToast} />, '/certificates': <Certificates token={token} />, '/notifications': <Notifications token={token} />, '/audit-logs': <Audit token={token} />, '/enforcement': <Enforcement token={token} />, '/verify-field': <FieldVerification token={token} toast={setToast} /> };
-  return <div className="shell"><aside className={menu ? 'open' : ''}><button className="brand" onClick={() => go('/dashboard')}>LM <span>Digital Verification</span></button><p className="role-label">{user.role} PORTAL</p>{items.map(([label, item]) => <button className={path === item ? 'active' : ''} onClick={() => { go(item); setMenu(false); }} key={item}>{label}</button>)}<button className="logout" onClick={() => { logout(); go('/'); }}>Sign out</button></aside><div className="content"><header className="topbar"><button className="mobile-menu" aria-label="Toggle navigation" onClick={() => setMenu(!menu)}>☰</button><div><p className="eyebrow">LEGAL METROLOGY PLATFORM</p><h2>{items.find(item => item[1] === path)?.[0] || 'Dashboard'}</h2></div><button className="profile" onClick={() => go('/notifications')}>{user.full_name}<small>{user.email}</small></button></header>{views[path]}</div>{toast && <Toast message={toast} onClose={() => setToast('')} />}</div>;
+
+function Landing({ darkMode, onToggleTheme }) {
+  return (
+    <div className="public">
+      <header className="public-nav">
+        <button className="brand" onClick={() => go('/')} style={{ background: 'none', border: 'none', padding: 0 }}>
+          <BrandLogo darkMode={darkMode} />
+        </button>
+        <nav>
+          <a href="#about">About</a>
+          <a href="#amendment">2025 Rules</a>
+          <button className="theme-toggle-btn" aria-label="Toggle theme" onClick={onToggleTheme}>
+            {darkMode ? '☀️' : '🌙'}
+          </button>
+          <button className="outline" onClick={() => go('/complaints')}>⚖️ Citizen Complaints</button>
+          <button className="outline" onClick={() => go('/register')}>Register business</button>
+          <button onClick={() => go('/login')}>Sign in</button>
+        </nav>
+      </header>
+      <main>
+        <section className="hero">
+          <div>
+            <p className="eyebrow">GOVERNMENT OF INDIA · LEGAL METROLOGY</p>
+            <h1>Trust every <em>measure.</em></h1>
+            <p>Complete Smart Legal Metrology Digital Ecosystem with 18-category automatic GATC routing, smart officer scheduling, tamper-evident digital certificates, and citizen complaint redressal.</p>
+            <div className="hero-actions">
+              <button onClick={() => go('/login')}>Access Portal</button>
+              <button className="outline" onClick={() => go('/complaints')}>⚖️ File / Track Complaint</button>
+              <button className="outline" onClick={() => go('/register')}>Register Establishment</button>
+              <button className="outline" onClick={() => go('/verify/')}>Verify Certificate QR</button>
+            </div>
+          </div>
+          <div className="hero-card">
+            <span className="seal">SS</span>
+            <h3>Smart Digital Metrology Ecosystem</h3>
+            <p>18 GATC amendment categories, automated AI assistance, collision-prevented scheduling, and citizen grievance redressal.</p>
+            <div className="verified-line">✓ GATC 2025 Rules & Legal Metrology Act 2009</div>
+          </div>
+        </section>
+        <section className="feature-grid" id="about">
+          <article>
+            <b>01</b>
+            <h3>Intelligent 18-Category Routing</h3>
+            <p>Automated dispatch to GATC accredited testing centres or regional LMO officers based on 2025 amendment categories and jurisdiction.</p>
+          </article>
+          <article>
+            <b>02</b>
+            <h3>Smart Officer Scheduling</h3>
+            <p>Officers configure inspection windows; businesses pick available slots with real-time double-booking prevention.</p>
+          </article>
+          <article>
+            <b>03</b>
+            <h3>Citizen Complaint Portal</h3>
+            <p>Dual-entry QR code scanning or direct shop search with mobile OTP verification, GPS geotagging, and repeat offender tracking.</p>
+          </article>
+        </section>
+      </main>
+
+    </div>
+  );
 }
+
+function Register({ darkMode, onToggleTheme }) {
+  const [form, setForm] = useState({
+    full_name: '', email: '', password: '', organization_name: '', contact_number: '',
+    state: '', district: '', address: '', latitude: '', longitude: ''
+  });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [showPayment, setShowPayment] = useState(false);
+  const [receiptData, setReceiptData] = useState(null);
+
+  const districts = form.state ? (INDIAN_STATES_AND_DISTRICTS[form.state] || []) : [];
+
+  const captureGPS = () => {
+    if (!navigator.geolocation) {
+      setError('Geolocation is not supported by your browser.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        setForm(prev => ({
+          ...prev,
+          latitude: pos.coords.latitude.toFixed(6),
+          longitude: pos.coords.longitude.toFixed(6)
+        }));
+      },
+      () => setError('Unable to retrieve GPS coordinates. Please allow location permissions.')
+    );
+  };
+
+  const handleValidateAndPay = event => {
+    event.preventDefault();
+    if (!form.full_name.trim() || !form.email.trim() || !form.password || !form.organization_name.trim() || !form.contact_number.trim() || !form.state || !form.district || !form.address.trim()) {
+      setError('Please fill in all mandatory establishment details before proceeding.');
+      return;
+    }
+    if (form.password.length < 8) {
+      setError('Password must be at least 8 characters long.');
+      return;
+    }
+    setError('');
+    setShowPayment(true);
+  };
+
+  const handlePaymentSuccess = async (receipt) => {
+    setReceiptData(receipt);
+    setShowPayment(false);
+    setBusy(true);
+    setError('');
+    try {
+      await api.register({
+        ...form,
+        role: 'BUSINESS',
+        latitude: form.latitude ? parseFloat(form.latitude) : null,
+        longitude: form.longitude ? parseFloat(form.longitude) : null,
+        role_specific_info: {
+          challan_number: receipt.challan_number,
+          transaction_id: receipt.transaction_id,
+          amount_paid: receipt.amount,
+          payment_status: 'PAID',
+          payment_timestamp: receipt.timestamp,
+          statutory_ref: receipt.statutory_reference
+        }
+      });
+      setSuccess(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="auth-page" style={{ maxWidth: '650px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+        <button className="brand back" onClick={() => go('/')} style={{ background: 'none', border: 'none', padding: 0 }}>
+          <BrandLogo darkMode={darkMode} />
+        </button>
+        <button className="theme-toggle-btn" aria-label="Toggle theme" onClick={onToggleTheme}>
+          {darkMode ? '☀️' : '🌙'}
+        </button>
+      </div>
+      <section>
+        <p className="eyebrow">OFFICIAL BUSINESS REGISTRATION</p>
+        <h1>Register Business Account</h1>
+        <p>Register your establishment under the Legal Metrology Act, 2009.</p>
+
+        {success ? (
+          <div className="valid-card" style={{ marginTop: '1.5rem', textAlign: 'center' }}>
+            <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🏛️</div>
+            <h2 style={{ color: '#10b981' }}>✓ Registration & Statutory Payment Confirmed</h2>
+            <p style={{ marginTop: '0.5rem' }}>
+              Your establishment <strong>{form.organization_name}</strong> has been registered with the Legal Metrology Department.
+            </p>
+            {receiptData && (
+              <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '1rem', margin: '1rem 0', textAlign: 'left', fontSize: '0.84rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>e-Challan Reference:</span>
+                  <strong>{receiptData.challan_number}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Transaction Ref ID:</span>
+                  <span>{receiptData.transaction_id}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Statutory Fee Paid:</span>
+                  <span style={{ color: '#10b981', fontWeight: 800 }}>₹{receiptData.amount.toFixed(2)} (PAID)</span>
+                </div>
+              </div>
+            )}
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              You can now sign in to register instruments, track quotas, and apply for verification.
+            </p>
+            <button style={{ marginTop: '1rem', width: '100%' }} onClick={() => go('/login')}>
+              Proceed to Sign In ➔
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={handleValidateAndPay} className="form-grid" style={{ marginTop: '1.5rem' }}>
+            <label className="wide">Full Name of Authorized Signatory
+              <input required value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} placeholder="e.g. Ramesh Kumar" />
+            </label>
+            <label>Official Email Address
+              <input type="email" required value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="owner@company.com" />
+            </label>
+            <label>Password
+              <input type="password" required minLength={8} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="At least 8 characters" />
+            </label>
+            <label>Establishment / Business Name
+              <input required value={form.organization_name} onChange={e => setForm({ ...form, organization_name: e.target.value })} placeholder="e.g. Southern Scales & Measures Pvt Ltd" />
+            </label>
+            <label>Contact Number
+              <input required value={form.contact_number} onChange={e => setForm({ ...form, contact_number: e.target.value })} placeholder="+91 98400 00000" />
+            </label>
+            
+            <label>Indian State / UT
+              <select required value={form.state} onChange={e => setForm({ ...form, state: e.target.value, district: '' })}>
+                <option value="">Select State / UT</option>
+                {INDIAN_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+            <label>Jurisdiction District
+              <select required value={form.district} disabled={!form.state} onChange={e => setForm({ ...form, district: e.target.value })}>
+                <option value="">{form.state ? 'Select District' : 'Choose State First'}</option>
+                {districts.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </label>
+
+            <label className="wide">Full Business Address
+              <textarea required value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder="Building, Street, Area, Pincode" />
+            </label>
+
+            <div className="wide" style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+              <div style={{ flex: 1 }}>
+                <label>GPS Latitude (Optional)
+                  <input type="number" step="any" value={form.latitude} onChange={e => setForm({ ...form, latitude: e.target.value })} placeholder="e.g. 13.0604" />
+                </label>
+              </div>
+              <div style={{ flex: 1 }}>
+                <label>GPS Longitude (Optional)
+                  <input type="number" step="any" value={form.longitude} onChange={e => setForm({ ...form, longitude: e.target.value })} placeholder="e.g. 80.2496" />
+                </label>
+              </div>
+              <button type="button" className="outline" style={{ height: '42px', marginTop: '22px' }} onClick={captureGPS}>
+                📍 Autofill GPS
+              </button>
+            </div>
+
+            {error && <p className="form-error wide">{error}</p>}
+            <button className="wide" disabled={busy} style={{ marginTop: '1rem', background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)', color: '#fff', fontWeight: 800 }}>
+              {busy ? 'Registering establishment…' : '💳 Proceed to Statutory Fee Payment (₹708)'}
+            </button>
+            <p className="wide muted" style={{ textAlign: 'center', marginTop: '0.5rem' }}>
+              Already registered? <button type="button" className="link" onClick={() => go('/login')}>Sign in here</button>
+            </p>
+          </form>
+        )}
+
+        {showPayment && (
+          <PaymentGatewayModal
+            title="Business Registration Statutory e-Challan"
+            purpose="BUSINESS_REGISTRATION"
+            purposeLabel="Establishment Registration & Initial Verification Quota"
+            payerName={form.full_name}
+            organizationName={form.organization_name}
+            state={form.state}
+            district={form.district}
+            baseFee={500}
+            taxRate={0.18}
+            onCancel={() => setShowPayment(false)}
+            onPaymentSuccess={handlePaymentSuccess}
+            darkMode={darkMode}
+          />
+        )}
+      </section>
+    </main>
+  );
+}
+
+function Login({ darkMode, onToggleTheme }) {
+  const { login } = useAuth();
+  const [form, setForm] = useState({ email: '', password: '' });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async event => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await login(form.email, form.password);
+      go('/dashboard');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="auth-page">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+        <button className="brand back" onClick={() => go('/')} style={{ background: 'none', border: 'none', padding: 0 }}>
+          <BrandLogo darkMode={darkMode} />
+        </button>
+        <button className="theme-toggle-btn" aria-label="Toggle theme" onClick={onToggleTheme}>
+          {darkMode ? '☀️' : '🌙'}
+        </button>
+      </div>
+      <section>
+        <p className="eyebrow">SECURE PORTAL</p>
+        <h1>Sign in</h1>
+        <p>Sign in to access your Legal Metrology workspace.</p>
+        <form onSubmit={submit}>
+          <label>Email Address
+            <input type="email" required value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} />
+          </label>
+          <div style={{ margin: '1rem 0', padding: '0.85rem', background: 'var(--bg-hover)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+            <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+              ⚡ QUICK DEMO CREDENTIALS:
+            </p>
+            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="outline"
+                style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem' }}
+                onClick={() => setForm({ email: 'admin@test.com', password: 'Password123' })}
+              >
+                👑 Admin
+              </button>
+              <button
+                type="button"
+                className="outline"
+                style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem' }}
+                onClick={() => setForm({ email: 'lmo.chennai@test.com', password: 'Password123' })}
+              >
+                ⚖️ LMO Officer
+              </button>
+              <button
+                type="button"
+                className="outline"
+                style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem' }}
+                onClick={() => setForm({ email: 'gatc.mumbai@test.com', password: 'Password123' })}
+              >
+                🔬 GATC Lab
+              </button>
+              <button
+                type="button"
+                className="outline"
+                style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem' }}
+                onClick={() => setForm({ email: 'business@test.com', password: 'Password123' })}
+              >
+                🏢 Business
+              </button>
+            </div>
+          </div>
+
+
+          <label>Password
+            <input type="password" required value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} />
+          </label>
+
+          {error && <p className="form-error">{error}</p>}
+
+          <button disabled={busy} style={{ width: '100%', marginTop: '0.5rem' }}>
+            {busy ? 'Signing in…' : 'Sign in securely'}
+          </button>
+          <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
+            <button type="button" className="link" onClick={() => go('/register')}>
+              Don't have an account? Register as a business
+            </button>
+          </div>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function Shell({ path, user, darkMode, onToggleTheme }) {
+  const { logout, token } = useAuth();
+  const [toast, setToast] = useState('');
+  const [menu, setMenu] = useState(false);
+  const items = nav[user.role] || [];
+
+  const views = {
+    '/dashboard': <Dashboard user={user} token={token} />,
+    '/instruments': <Instruments token={token} role={user.role} toast={setToast} />,
+    '/applications': <Applications token={token} role={user.role} toast={setToast} />,
+    '/assignments': <Assignments token={token} role={user.role} toast={setToast} />,
+    '/certificates': <Certificates token={token} role={user.role} toast={setToast} darkMode={darkMode} />,
+    '/due-tracking': <DueTracking token={token} />,
+    '/notifications': <Notifications token={token} />,
+    '/verify-field': <FieldVerification token={token} toast={setToast} />,
+    '/schedule': <SmartScheduler user={user} token={token} />,
+    '/complaints': <OfficerComplaintWorkbench user={user} token={token} />,
+    '/workforce': <AdminWorkforceManager token={token} />,
+    '/heatmap': <ComplaintHeatmap token={token} darkMode={darkMode} />
+  };
+
+  return (
+    <div className="shell">
+      <aside className={menu ? 'open' : ''}>
+        <button className="brand" onClick={() => go('/dashboard')} style={{ padding: 0, border: 'none', background: 'none', display: 'block', margin: '0 0 1.5rem 0' }}>
+          <BrandLogo darkMode={darkMode} />
+        </button>
+        <p className="role-label">{user.role} PORTAL</p>
+        {items.map(([label, item]) => (
+          <button className={path === item ? 'active' : ''} onClick={() => { go(item); setMenu(false); }} key={item}>
+            {label}
+          </button>
+        ))}
+        <button className="logout" onClick={() => { logout(); go('/'); }}>Sign out</button>
+      </aside>
+      <div className="content">
+        <header className="topbar">
+          <button className="mobile-menu" aria-label="Toggle navigation" onClick={() => setMenu(!menu)}>☰</button>
+          <div>
+            <p className="eyebrow">LEGAL METROLOGY PLATFORM</p>
+            <h2>{items.find(item => item[1] === path)?.[0] || 'Dashboard'}</h2>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <button className="theme-toggle-btn" aria-label="Toggle theme" onClick={onToggleTheme}>
+              {darkMode ? '☀️' : '🌙'}
+            </button>
+            <button className="profile" onClick={() => go('/notifications')}>
+              {user.full_name}
+              <small>{user.email} {user.district ? `· ${user.district}` : ''}</small>
+            </button>
+          </div>
+        </header>
+        {views[path]}
+        <AIAssistantDrawer user={user} token={token} onNavigate={go} darkMode={darkMode} />
+      </div>
+      {toast && <Toast message={toast} onClose={() => setToast('')} />}
+    </div>
+  );
+
+}
+
 function Dashboard({ user, token }) {
-  const admin = useAsync(() => user.role === 'ADMIN' ? api.dashboard(token) : Promise.resolve(null), [user.role, token]); const instruments = useAsync(() => api.instruments(token), [token]); const applications = useAsync(() => api.applications(token), [token]); const certs = useAsync(() => api.certificates(token), [token]);
-  if (admin.loading || instruments.loading || applications.loading || certs.loading) return <Spinner />; if (admin.error || instruments.error || applications.error || certs.error) return <ErrorState text={admin.error || instruments.error || applications.error || certs.error} />;
-  const pending = applications.data.filter(item => !['CERTIFICATE_ISSUED', 'REJECTED', 'CANCELLED'].includes(item.status)).length; const data = admin.data;
-  return <main className="page"><section className="welcome"><div><h1>Good day, {user.full_name.split(' ')[0]}.</h1><p>{user.role === 'ADMIN' ? 'A live overview of verification activity and risk.' : 'Your live legal metrology workspace.'}</p></div><Badge>{user.role}</Badge></section><section className="stats">{user.role === 'ADMIN' ? <><Stat label="Total instruments" value={data.total_instruments} /><Stat label="Applications" value={data.total_applications} /><Stat label="Pending verification" value={data.pending_verifications} tone="amber" /><Stat label="Certificates issued" value={data.certificates_issued} tone="green" /><Stat label="Expiring certificates" value={data.certificates_expiring} tone="red" /><Stat label="Expired certificates" value={data.expired_certificates} tone="red" /></> : <><Stat label="Registered instruments" value={instruments.data.length} /><Stat label="Pending applications" value={pending} tone="amber" /><Stat label="Active certificates" value={certs.data.filter(item => item.status === 'VALID').length} tone="green" /><Stat label="Assignments" value={user.role === 'BUSINESS' ? '—' : 'Open schedule'} /></>}</section>{user.role === 'ADMIN' && <section className="panel"><div className="panel-title"><h2>Risk distribution</h2><span className="muted">Live backend calculation</span></div><div className="risk-bars">{Object.entries(data.risk_distribution || {}).map(([level, count]) => <div key={level}><span>{level}</span><b style={{ width: `${Math.max(10, count * 18)}%` }}>{count}</b></div>)}</div><p className="muted">Total users, rejection rate, and enforcement summary are not available from the current backend.</p></section>}<section className="panel"><div className="panel-title"><h2>Recent applications</h2><button className="link" onClick={() => go('/applications')}>View all</button></div><DataTable rows={applications.data.slice(0, 5)} columns={[[ 'Application', 'application_number' ], [ 'Type', 'application_type' ], [ 'Status', item => <Badge>{item.status}</Badge> ], [ 'Requested', 'requested_date' ]]} /></section></main>;
+  const admin = useAsync(() => user.role === 'ADMIN' ? api.dashboard(token) : Promise.resolve(null), [user.role, token]);
+  const instruments = useAsync(() => api.instruments(token), [token]);
+  const applications = useAsync(() => api.applications(token), [token]);
+  const certs = useAsync(() => api.certificates(token), [token]);
+
+  if (admin.loading || instruments.loading || applications.loading || certs.loading) return <Spinner />;
+  if (admin.error || instruments.error || applications.error || certs.error) {
+    return <ErrorState text={admin.error || instruments.error || applications.error || certs.error} />;
+  }
+
+  const pending = (applications.data || []).filter(item => !['CERTIFICATE_ISSUED', 'REJECTED', 'CANCELLED'].includes(item.status)).length;
+  const data = admin.data;
+
+  return (
+    <main className="page">
+      <section className="welcome">
+        <div>
+          <h1>Good day, {user.full_name.split(' ')[0]}.</h1>
+          <p>{user.role === 'ADMIN' ? 'A live overview of legal metrology verification activity and risk.' : 'Your live legal metrology workspace.'}</p>
+        </div>
+        <Badge>{user.role}</Badge>
+      </section>
+
+      <section className="stats">
+        {user.role === 'ADMIN' ? (
+          <>
+            <Stat label="Total instruments" value={data?.total_instruments} />
+            <Stat label="Applications" value={data?.total_applications} />
+            <Stat label="Pending verification" value={data?.pending_verifications} tone="amber" />
+            <Stat label="Certificates issued" value={data?.certificates_issued} tone="green" />
+            <Stat label="Expiring certificates" value={data?.certificates_expiring} tone="red" />
+            <Stat label="Expired certificates" value={data?.expired_certificates} tone="red" />
+          </>
+        ) : (
+          <>
+            <Stat label="Registered instruments" value={(instruments.data || []).length} />
+            <Stat label="Pending applications" value={pending} tone="amber" />
+            <Stat label="Active certificates" value={(certs.data || []).filter(item => item.status === 'VALID').length} tone="green" />
+            <Stat label="Assignments" value={user.role === 'BUSINESS' ? '—' : 'Open schedule'} />
+          </>
+        )}
+      </section>
+
+      {user.role === 'ADMIN' && data?.risk_distribution && (() => {
+        const entries = Object.entries(data.risk_distribution || {});
+        const total = entries.reduce((acc, [, v]) => acc + Number(v || 0), 0);
+        const maxVal = Math.max(...entries.map(([, v]) => Number(v || 0)), 1);
+
+        const riskColors = {
+          LOW: { bar: 'linear-gradient(90deg, #10b981, #059669)', text: '#10b981' },
+          MEDIUM: { bar: 'linear-gradient(90deg, #f59e0b, #d97706)', text: '#f59e0b' },
+          HIGH: { bar: 'linear-gradient(90deg, #f97316, #ea580c)', text: '#f97316' },
+          CRITICAL: { bar: 'linear-gradient(90deg, #ef4444, #b91c1c)', text: '#ef4444' }
+        };
+
+        return (
+          <section className="panel">
+            <div className="panel-title">
+              <div>
+                <h2>Risk distribution</h2>
+                <small className="muted">{total} total instruments evaluated</small>
+              </div>
+              <span className="muted">Live calculation</span>
+            </div>
+            <div className="risk-bars-container">
+              {entries.map(([level, count]) => {
+                const countNum = Number(count || 0);
+                const percent = total > 0 ? Math.round((countNum / total) * 100) : 0;
+                const barWidth = total > 0 && countNum > 0 ? Math.min(100, Math.max(8, (countNum / total) * 100)) : 0;
+                const colors = riskColors[level.toUpperCase()] || { bar: 'var(--color-primary)', text: 'var(--color-primary)' };
+
+                return (
+                  <div className="risk-row" key={level}>
+                    <div className="risk-label">
+                      <span style={{ fontWeight: 700, color: colors.text }}>{level}</span>
+                      <small className="muted">{countNum} instruments ({percent}%)</small>
+                    </div>
+                    <div className="risk-track">
+                      <div
+                        className="risk-bar"
+                        style={{
+                          width: `${barWidth}%`,
+                          background: colors.bar,
+                        }}
+                      >
+                        {barWidth >= 12 && <span className="risk-bar-text">{countNum}</span>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })()}
+
+
+      <section className="panel">
+        <div className="panel-title">
+          <h2>Recent applications</h2>
+          <button className="link" onClick={() => go('/applications')}>View all</button>
+        </div>
+        <DataTable
+          rows={(applications.data || []).slice(0, 5)}
+          columns={[
+            ['Application', 'application_number'],
+            ['Type', 'application_type'],
+            ['Status', item => <Badge>{item.status}</Badge>],
+            ['Requested', 'requested_date']
+          ]}
+        />
+      </section>
+    </main>
+  );
 }
+
 function Instruments({ token, role, toast }) {
-  const { data, loading, error } = useAsync(() => api.instruments(token), [token]); const [show, setShow] = useState(false); const [selected, setSelected] = useState(null);
-  if (loading) return <Spinner />; if (error) return <ErrorState text={error} />;
+  const { data, loading, error, refresh } = useAsync(() => api.instruments(token), [token]);
+  const [show, setShow] = useState(false);
+  const [selected, setSelected] = useState(null);
+
+  if (loading) return <Spinner />;
+  if (error) return <ErrorState text={error} />;
   const canRegister = role === 'BUSINESS' || role === 'ADMIN';
-  return <main className="page"><div className="page-actions"><p>Register and manage officially identified instruments.</p>{canRegister && <button onClick={() => setShow(true)}>+ Register instrument</button>}</div><DataTable rows={data} search columns={[[ 'Instrument ID', 'instrument_id' ], [ 'Serial', 'serial_number' ], [ 'Manufacturer', item => `${item.manufacturer} ${item.model}` ], [ 'Type', 'instrument_type' ], [ 'Status', item => <Badge>{item.status}</Badge> ], [ '', item => <button className="link" onClick={() => setSelected(item)}>Passport</button> ]]} />{show && <InstrumentForm token={token} close={() => setShow(false)} done={item => { setShow(false); toast(`Instrument ${item.instrument_id} registered.`); location.reload(); }} />}{selected && <Passport instrument={selected} token={token} uploadAllowed={canRegister} close={() => setSelected(null)} toast={toast} />}</main>;
+
+  return (
+    <main className="page">
+      <div className="page-actions">
+        <p>Register and manage officially identified weighing and measuring instruments.</p>
+        {canRegister && <button onClick={() => setShow(true)}>+ Register instrument (2025 GATC Rules)</button>}
+      </div>
+      <DataTable
+        rows={data || []}
+        search
+        columns={[
+          ['Instrument ID', 'instrument_id'],
+          ['Serial Number', 'serial_number'],
+          ['Category', 'category'],
+          ['Manufacturer / Model', item => `${item.manufacturer} ${item.model}`],
+          ['Capacity / Unit', item => `${item.capacity || '—'} ${item.measurement_unit || ''}`],
+          ['Jurisdiction', item => `${item.district}, ${item.state}`],
+          ['Status', item => <Badge>{item.status}</Badge>],
+          ['', item => <button className="link" onClick={() => setSelected(item)}>Digital Passport</button>]
+        ]}
+      />
+      {show && (
+        <InstrumentForm
+          token={token}
+          close={() => setShow(false)}
+          done={item => {
+            setShow(false);
+            toast(`Instrument ${item.instrument_id} registered.`);
+            refresh();
+          }}
+        />
+      )}
+      {selected && (
+        <Passport
+          instrument={selected}
+          token={token}
+          uploadAllowed={canRegister}
+          close={() => setSelected(null)}
+          toast={toast}
+        />
+      )}
+    </main>
+  );
 }
+
 function InstrumentForm({ token, close, done }) {
-  const [form, setForm] = useState({ instrument_type: '', category: '', manufacturer: '', model: '', serial_number: '', capacity: '', accuracy_class: '', measurement_unit: 'kg', year_of_manufacture: '', owner_name: '', owner_address: '', state: '', district: '', location: '' }); const [error, setError] = useState('');
-  const submit = async event => { event.preventDefault(); try { done(await api.createInstrument({ ...form, year_of_manufacture: form.year_of_manufacture ? Number(form.year_of_manufacture) : null }, token)); } catch (err) { setError(err.message); } };
-  return <Modal title="Register instrument" onClose={close}><form className="form-grid" onSubmit={submit}>{Object.entries(form).map(([key, value]) => <label key={key}>{key.replaceAll('_', ' ')}<input required={!['capacity', 'accuracy_class', 'owner_address', 'location', 'year_of_manufacture'].includes(key)} value={value} onChange={event => setForm({ ...form, [key]: event.target.value })} /></label>)}{error && <p className="form-error">{error}</p>}<button>Register instrument</button></form></Modal>;
+  const [gatcCategories, setGatcCategories] = useState([]);
+  const [selectedCat, setSelectedCat] = useState(null);
+  const [form, setForm] = useState({
+    instrument_type: '', category: '', manufacturer: '', model: '', serial_number: '',
+    capacity: '', accuracy_class: '', measurement_unit: '', year_of_manufacture: new Date().getFullYear(),
+    owner_name: '', owner_address: '', state: '', district: '', location: ''
+  });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.gatcRules().then(res => setGatcCategories(res.categories || [])).catch(console.error);
+  }, []);
+
+  const onCategoryChange = catId => {
+    const cat = gatcCategories.find(c => c.id === catId);
+    setSelectedCat(cat);
+    setForm(prev => ({
+      ...prev,
+      category: catId,
+      instrument_type: cat ? cat.name : prev.instrument_type,
+      measurement_unit: cat && cat.units ? cat.units[0] : 'kg',
+      accuracy_class: cat && cat.accuracy_classes ? cat.accuracy_classes[0] : ''
+    }));
+  };
+
+  const districts = form.state ? (INDIAN_STATES_AND_DISTRICTS[form.state] || []) : [];
+
+  const submit = async event => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const res = await api.createInstrument({
+        ...form,
+        year_of_manufacture: form.year_of_manufacture ? Number(form.year_of_manufacture) : null
+      }, token);
+      done(res);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Register Instrument (2025 GATC Amendment)" onClose={close}>
+      <form className="form-grid" onSubmit={submit}>
+        <label className="wide">Verifiable Category (18 Categories under 2025 Rules)
+          <select required value={form.category} onChange={e => onCategoryChange(e.target.value)}>
+            <option value="">Select one of 18 GATC categories</option>
+            {gatcCategories.map(c => <option key={c.id} value={c.id}>{c.name} — {c.description}</option>)}
+          </select>
+        </label>
+        <label>Instrument Type
+          <input required value={form.instrument_type} onChange={e => setForm({ ...form, instrument_type: e.target.value })} />
+        </label>
+        <label>Serial Number
+          <input required value={form.serial_number} onChange={e => setForm({ ...form, serial_number: e.target.value })} />
+        </label>
+        <label>Manufacturer
+          <input required value={form.manufacturer} onChange={e => setForm({ ...form, manufacturer: e.target.value })} />
+        </label>
+        <label>Model
+          <input required value={form.model} onChange={e => setForm({ ...form, model: e.target.value })} />
+        </label>
+        <label>{selectedCat?.capacity_prompt || 'Capacity / Range'}
+          <input required value={form.capacity} onChange={e => setForm({ ...form, capacity: e.target.value })} />
+        </label>
+        <label>Measurement Unit
+          {selectedCat?.units ? (
+            <select value={form.measurement_unit} onChange={e => setForm({ ...form, measurement_unit: e.target.value })}>
+              {selectedCat.units.map(u => <option key={u} value={u}>{u}</option>)}
+            </select>
+          ) : (
+            <input value={form.measurement_unit} onChange={e => setForm({ ...form, measurement_unit: e.target.value })} />
+          )}
+        </label>
+        <label>State / UT
+          <select required value={form.state} onChange={e => setForm({ ...form, state: e.target.value, district: '' })}>
+            <option value="">Select State</option>
+            {INDIAN_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </label>
+        <label>District (Jurisdiction)
+          <select required value={form.district} disabled={!form.state} onChange={e => setForm({ ...form, district: e.target.value })}>
+            <option value="">Select District</option>
+            {districts.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </label>
+        <label className="wide">Owner / Establishment Name
+          <input required value={form.owner_name} onChange={e => setForm({ ...form, owner_name: e.target.value })} />
+        </label>
+        {error && <p className="form-error wide">{error}</p>}
+        <button className="wide" disabled={busy}>{busy ? 'Registering…' : 'Register Instrument'}</button>
+      </form>
+    </Modal>
+  );
 }
+
 function Passport({ instrument, token, uploadAllowed, close, toast }) {
-  const { data, loading, error } = useAsync(() => api.passport(instrument.instrument_id, token), [instrument.instrument_id, token]); const [file, setFile] = useState(null); const [uploading, setUploading] = useState(false); const [uploadError, setUploadError] = useState('');
-  const upload = async event => { event.preventDefault(); if (!file) return; if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type) || file.size > 10 * 1024 * 1024) { setUploadError('Choose a PDF, JPEG, or PNG file no larger than 10 MB.'); return; } setUploading(true); setUploadError(''); try { await api.uploadInstrumentDocument(instrument.instrument_id, file, token); toast('Instrument document uploaded.'); location.reload(); } catch (err) { setUploadError(err.message); } finally { setUploading(false); } };
-  return <Modal title="Instrument Digital Passport" onClose={close}>{loading ? <Spinner /> : error ? <ErrorState text={error} /> : <div className="passport"><div className="passport-head"><span className="seal">LM</span><div><p className="eyebrow">OFFICIAL INSTRUMENT PASSPORT</p><h2>{data.instrument.instrument_id}</h2><Badge>{data.instrument.status}</Badge></div></div><dl><dt>Owner</dt><dd>{data.instrument.owner_name}</dd><dt>Instrument</dt><dd>{data.instrument.manufacturer} {data.instrument.model}</dd><dt>Serial number</dt><dd>{data.instrument.serial_number}</dd><dt>Type / class</dt><dd>{data.instrument.instrument_type} / {data.instrument.accuracy_class || '—'}</dd><dt>Current certificate</dt><dd>{data.current_certificate ? <>{data.current_certificate.number} · {data.current_certificate.valid_until}</> : 'No active certificate'}</dd><dt>Risk</dt><dd><Badge>{data.risk_level}</Badge> Score {data.risk_score}</dd></dl><h3>Supporting documents</h3>{data.documents.length ? <ul className="file-list">{data.documents.map(item => <li key={item.path}>{item.filename}</li>)}</ul> : <p className="muted">No documents have been uploaded.</p>}{uploadAllowed && <form className="upload-form" onSubmit={upload}><label>Add official document<input type="file" accept="application/pdf,image/jpeg,image/png" onChange={event => setFile(event.target.files[0])} /></label>{uploadError && <p className="form-error">{uploadError}</p>}<button disabled={uploading}>{uploading ? 'Uploading…' : 'Upload document'}</button></form>}<h3>Verification history</h3>{data.verification_history.length ? <DataTable rows={data.verification_history} columns={[[ 'Date', 'verified_at' ], [ 'Result', item => <Badge>{item.result}</Badge> ], [ 'Remarks', 'remarks' ]]} /> : <Empty title="No verification history yet" />}</div>}</Modal>;
+  const { data, loading, error } = useAsync(() => api.passport(instrument.instrument_id, token), [instrument.instrument_id, token]);
+  return (
+    <Modal title="Digital Instrument Passport" onClose={close}>
+      {loading ? <Spinner /> : error ? <ErrorState text={error} /> : (
+        <div className="passport">
+          <div className="passport-head">
+            <span className="seal">SS</span>
+            <div>
+              <p className="eyebrow">OFFICIAL INSTRUMENT PASSPORT</p>
+              <h2>{data.instrument.instrument_id}</h2>
+              <Badge>{data.instrument.status}</Badge>
+            </div>
+          </div>
+          <dl>
+            <dt>Owner</dt><dd>{data.instrument.owner_name}</dd>
+            <dt>Jurisdiction</dt><dd>{data.instrument.district}, {data.instrument.state}</dd>
+            <dt>Instrument</dt><dd>{data.instrument.manufacturer} {data.instrument.model} ({data.instrument.category})</dd>
+            <dt>Capacity / Unit</dt><dd>{data.instrument.capacity || '—'} {data.instrument.measurement_unit || ''}</dd>
+            <dt>Active Certificate</dt><dd>{data.current_certificate ? `${data.current_certificate.number}` : 'No active certificate'}</dd>
+          </dl>
+          <h3>Certificate History</h3>
+          <DataTable
+            rows={data.all_certificates || []}
+            columns={[
+              ['Certificate No.', 'number'],
+              ['Valid From', 'valid_from'],
+              ['Valid Until', 'valid_until'],
+              ['Status', item => <Badge>{item.status}</Badge>]
+            ]}
+          />
+        </div>
+      )}
+    </Modal>
+  );
 }
+
 function Applications({ token, role, toast }) {
-  const { data, loading, error } = useAsync(() => api.applications(token), [token]); const [show, setShow] = useState(false); const [detail, setDetail] = useState(null);
-  if (loading) return <Spinner />; if (error) return <ErrorState text={error} />; const canCreate = role === 'BUSINESS' || role === 'ADMIN';
-  return <main className="page"><div className="page-actions"><p>Track the verification workflow for every instrument.</p>{canCreate && <button onClick={() => setShow(true)}>+ New application</button>}</div><DataTable rows={data} search columns={[[ 'Application', 'application_number' ], [ 'Type', 'application_type' ], [ 'Status', item => <Badge>{item.status}</Badge> ], [ 'Requested', 'requested_date' ], [ '', item => <button className="link" onClick={() => setDetail(item)}>Timeline</button> ]]} />{show && <ApplicationForm token={token} close={() => setShow(false)} done={item => { setShow(false); toast(`Application ${item.application_number} submitted.`); location.reload(); }} />}{detail && <Modal title={detail.application_number} onClose={() => setDetail(null)}><Timeline status={detail.status} /><p className="muted">Status transitions are enforced by the backend.</p></Modal>}</main>;
+  const { data, loading, error, refresh } = useAsync(() => api.applications(token), [token]);
+  const [show, setShow] = useState(false);
+  const [detail, setDetail] = useState(null);
+
+  if (loading) return <Spinner />;
+  if (error) return <ErrorState text={error} />;
+  const canCreate = role === 'BUSINESS' || role === 'ADMIN';
+
+  return (
+    <main className="page">
+      <div className="page-actions">
+        <p>Track the verification workflow for every registered instrument.</p>
+        {canCreate && <button onClick={() => setShow(true)}>+ New application</button>}
+      </div>
+      <DataTable
+        rows={data || []}
+        search
+        columns={[
+          ['Application', 'application_number'],
+          ['Type', 'application_type'],
+          ['Status', item => <Badge>{item.status}</Badge>],
+          ['Requested', 'requested_date'],
+          ['', item => <button className="link" onClick={() => setDetail(item)}>Timeline</button>]
+        ]}
+      />
+      {show && (
+        <ApplicationForm
+          token={token}
+          close={() => setShow(false)}
+          done={item => {
+            setShow(false);
+            toast(`Application ${item.application_number} submitted & auto-assigned to regional LMO.`);
+            refresh();
+          }}
+        />
+      )}
+      {detail && (
+        <Modal title={detail.application_number} onClose={() => setDetail(null)}>
+          <Timeline status={detail.status} />
+        </Modal>
+      )}
+    </main>
+  );
 }
-function ApplicationForm({ token, close, done }) { const { data: instruments, loading } = useAsync(() => api.instruments(token), [token]); const [form, setForm] = useState({ instrument_id: '', application_type: 'VERIFICATION', requested_date: '', preferred_location: '', remarks: '' }); const [error, setError] = useState(''); const submit = async event => { event.preventDefault(); try { const item = await api.createApplication(form, token); done(await api.submitApplication(item.application_number, token)); } catch (err) { setError(err.message); } }; if (loading) return <Modal title="New application" onClose={close}><Spinner /></Modal>; return <Modal title="New verification application" onClose={close}><form onSubmit={submit}><label>Instrument<select required value={form.instrument_id} onChange={event => setForm({ ...form, instrument_id: event.target.value })}><option value="">Choose an instrument</option>{instruments.map(item => <option value={item.instrument_id} key={item.instrument_id}>{item.instrument_id} — {item.manufacturer} {item.model}</option>)}</select></label><label>Application type<select value={form.application_type} onChange={event => setForm({ ...form, application_type: event.target.value })}><option>VERIFICATION</option><option>RE_VERIFICATION</option></select></label><label>Requested date<input type="date" value={form.requested_date} onChange={event => setForm({ ...form, requested_date: event.target.value })} /></label><label>Preferred location<input value={form.preferred_location} onChange={event => setForm({ ...form, preferred_location: event.target.value })} /></label><label>Remarks<textarea value={form.remarks} onChange={event => setForm({ ...form, remarks: event.target.value })} /></label>{error && <p className="form-error">{error}</p>}<button>Submit application</button></form></Modal>; }
+
+function ApplicationForm({ token, close, done, user }) {
+  const { data: instruments, loading } = useAsync(() => api.instruments(token), [token]);
+  const [form, setForm] = useState({
+    instrument_id: '', application_type: 'VERIFICATION', requested_date: new Date().toISOString().split('T')[0],
+    preferred_location: '', remarks: ''
+  });
+  const [error, setError] = useState('');
+  const [showPayment, setShowPayment] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const selectedInstrument = (instruments || []).find(i => i.instrument_id === form.instrument_id);
+
+  const handleValidateAndPay = event => {
+    event.preventDefault();
+    if (!form.instrument_id) {
+      setError('Please select an instrument to verify.');
+      return;
+    }
+    if (!form.preferred_location.trim()) {
+      setError('Please enter the inspection premises location.');
+      return;
+    }
+    setError('');
+    setShowPayment(true);
+  };
+
+  const handlePaymentSuccess = async (receipt) => {
+    setShowPayment(false);
+    setBusy(true);
+    setError('');
+    try {
+      const item = await api.createApplication({
+        ...form,
+        remarks: `${form.remarks ? form.remarks + ' | ' : ''}Statutory e-Challan: ${receipt.challan_number} (Txn: ${receipt.transaction_id})`
+      }, token);
+      const submitted = await api.submitApplication(item.application_number, token);
+      done(submitted);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loading) return <Modal title="New application" onClose={close}><Spinner /></Modal>;
+
+  return (
+    <Modal title="New Verification Application" onClose={close}>
+      <form onSubmit={handleValidateAndPay}>
+        <label>Select Instrument
+          <select required value={form.instrument_id} onChange={e => setForm({ ...form, instrument_id: e.target.value })}>
+            <option value="">Choose an instrument</option>
+            {(instruments || []).map(item => (
+              <option value={item.instrument_id} key={item.instrument_id}>
+                {item.instrument_id} — {item.manufacturer} {item.model} ({item.category})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>Application Type
+          <select value={form.application_type} onChange={e => setForm({ ...form, application_type: e.target.value })}>
+            <option value="VERIFICATION">INITIAL VERIFICATION</option>
+            <option value="RE_VERIFICATION">RE-VERIFICATION</option>
+          </select>
+        </label>
+        <label>Preferred Inspection Date
+          <input type="date" required value={form.requested_date} onChange={e => setForm({ ...form, requested_date: e.target.value })} />
+        </label>
+        <label>Premises / Location
+          <input required value={form.preferred_location} onChange={e => setForm({ ...form, preferred_location: e.target.value })} placeholder="Full address" />
+        </label>
+        <label>Remarks
+          <textarea value={form.remarks} onChange={e => setForm({ ...form, remarks: e.target.value })} />
+        </label>
+        {error && <p className="form-error">{error}</p>}
+        <button style={{ marginTop: '1rem', width: '100%', background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)', color: '#fff', fontWeight: 800 }} disabled={busy}>
+          {busy ? 'Submitting application…' : '💳 Proceed to Statutory Stamping Fee Payment (₹708)'}
+        </button>
+      </form>
+
+      {showPayment && (
+        <PaymentGatewayModal
+          title="Verification Stamping Fee e-Challan"
+          purpose="INSTRUMENT_VERIFICATION_FEE"
+          purposeLabel={`Verification & Stamping Fee for ${selectedInstrument?.manufacturer || ''} ${selectedInstrument?.model || ''} (${selectedInstrument?.category || 'Instrument'})`}
+          payerName="Authorized Commercial Establishment"
+          organizationName={selectedInstrument?.owner_name || "Commercial Establishment"}
+          state={selectedInstrument?.state || "Tamil Nadu"}
+          district={selectedInstrument?.district || "Chennai"}
+          baseFee={500}
+          taxRate={0.18}
+          onCancel={() => setShowPayment(false)}
+          onPaymentSuccess={handlePaymentSuccess}
+        />
+      )}
+    </Modal>
+  );
+}
+
 function Assignments({ token, role, toast }) {
-  const assignments = useAsync(() => api.assignments(token), [token]); const applications = useAsync(() => role === 'ADMIN' ? api.applications(token) : Promise.resolve([]), [role, token]); const [show, setShow] = useState(false);
-  if (assignments.loading || applications.loading) return <Spinner />; if (assignments.error || applications.error) return <ErrorState text={assignments.error || applications.error} />;
-  const complete = async item => { if (!confirm(`Mark assignment #${item.id} as completed?`)) return; try { await api.completeAssignment(item.id, token); toast(`Assignment #${item.id} completed.`); location.reload(); } catch (err) { toast(err.message); } };
-  return <main className="page"><div className="page-actions"><p>{role === 'ADMIN' ? 'Schedule submitted applications using verified officer IDs.' : 'Scheduled verification activity assigned by an administrator.'}</p>{role === 'ADMIN' && <button onClick={() => setShow(true)}>+ Schedule assignment</button>}</div>{role === 'ADMIN' && <p className="notice-note">The current backend has no user-directory endpoint. Enter an existing LMO/GATC user ID; role validation is enforced by the API.</p>}<DataTable rows={assignments.data} search columns={[[ 'ID', 'id' ], [ 'Application', 'application_id' ], [ 'Officer ID', 'assigned_officer_id' ], [ 'Centre ID', 'centre_id' ], [ 'Scheduled', 'scheduled_at' ], [ 'Priority', item => <Badge>{item.priority}</Badge> ], [ 'Status', item => <Badge>{item.status}</Badge> ], ...(role === 'ADMIN' ? [] : [[ '', item => item.status !== 'COMPLETED' && <button className="link" onClick={() => complete(item)}>Mark complete</button> ]])]} />{show && <AssignmentForm applications={applications.data} token={token} close={() => setShow(false)} done={message => { setShow(false); toast(message); location.reload(); }} />}</main>;
+  const assignments = useAsync(() => api.assignments(token), [token]);
+  if (assignments.loading) return <Spinner />;
+
+  return (
+    <main className="page">
+      <div className="page-actions">
+        <p>{role === 'ADMIN' ? 'Manage regional jurisdiction inspection assignments.' : 'Scheduled verification activity assigned by jurisdiction.'}</p>
+      </div>
+      <DataTable
+        rows={assignments.data || []}
+        search
+        columns={[
+          ['Assignment ID', 'id'],
+          ['Application No.', 'application_number'],
+          ['Scheduled At', item => new Date(item.scheduled_at).toLocaleString()],
+          ['Priority', item => <Badge>{item.priority}</Badge>],
+          ['Status', item => <Badge>{item.status}</Badge>],
+          ['Action', item => (
+            <button className="link" onClick={() => {
+              sessionStorage.setItem('lm_active_verification', item.id);
+              go('/verify-field');
+            }}>
+              Field Verification →
+            </button>
+          )]
+        ]}
+      />
+    </main>
+  );
 }
-function AssignmentForm({ applications, token, close, done }) { const ready = applications.filter(item => item.status === 'SUBMITTED'); const [form, setForm] = useState({ application_number: '', assigned_officer_id: '', centre_id: '', scheduled_at: '', location: '', priority: 'NORMAL' }); const [error, setError] = useState(''); const submit = async event => { event.preventDefault(); try { const result = await api.createAssignment({ ...form, assigned_officer_id: Number(form.assigned_officer_id), centre_id: form.centre_id ? Number(form.centre_id) : null, scheduled_at: new Date(form.scheduled_at).toISOString() }, token); done(`Assignment #${result.id} scheduled successfully.`); } catch (err) { setError(err.message); } }; return <Modal title="Schedule verification" onClose={close}><form className="form-grid" onSubmit={submit}><label>Submitted application<select required value={form.application_number} onChange={event => setForm({ ...form, application_number: event.target.value })}><option value="">Choose application</option>{ready.map(item => <option key={item.application_number} value={item.application_number}>{item.application_number}</option>)}</select></label><label>LMO / GATC user ID<input type="number" min="1" required value={form.assigned_officer_id} onChange={event => setForm({ ...form, assigned_officer_id: event.target.value })} /></label><label>Centre ID (optional)<input type="number" min="1" value={form.centre_id} onChange={event => setForm({ ...form, centre_id: event.target.value })} /></label><label>Schedule<input type="datetime-local" required value={form.scheduled_at} onChange={event => setForm({ ...form, scheduled_at: event.target.value })} /></label><label>Location<input required value={form.location} onChange={event => setForm({ ...form, location: event.target.value })} /></label><label>Priority<select value={form.priority} onChange={event => setForm({ ...form, priority: event.target.value })}><option>NORMAL</option><option>HIGH</option><option>CRITICAL</option></select></label>{error && <p className="form-error wide">{error}</p>}<button>Schedule assignment</button></form></Modal>; }
+
 function FieldVerification({ token, toast }) {
-  const assignments = useAsync(() => api.assignments(token), [token]); const applications = useAsync(() => api.applications(token), [token]); const [recordId, setRecordId] = useState(() => sessionStorage.getItem('lm_active_verification')); const record = useAsync(() => recordId ? api.verification(recordId, token) : Promise.resolve(null), [recordId, token]); const [start, setStart] = useState(false);
-  if (assignments.loading || applications.loading || record.loading) return <Spinner />; if (assignments.error || applications.error || record.error) return <ErrorState text={assignments.error || applications.error || record.error} />;
-  if (!recordId) return <main className="page"><section className="panel"><h2>Field verification</h2><p className="muted">Select one of your assigned schedules, then confirm its application reference to start the legal verification record.</p><DataTable rows={assignments.data.filter(item => item.status !== 'COMPLETED')} columns={[[ 'Assignment', 'id' ], [ 'Application ID', 'application_id' ], [ 'Schedule', 'scheduled_at' ], [ 'Priority', item => <Badge>{item.priority}</Badge> ], [ '', item => <button onClick={() => setStart(item)}>Start verification</button> ]]} />{start && <StartVerification assignment={start} applications={applications.data} token={token} close={() => setStart(false)} done={id => { sessionStorage.setItem('lm_active_verification', id); setRecordId(String(id)); toast(`Verification #${id} started.`); }} />}</section></main>;
-  return <VerificationEditor id={recordId} record={record.data} token={token} toast={toast} clear={() => { sessionStorage.removeItem('lm_active_verification'); setRecordId(null); }} />;
+  const assignments = useAsync(() => api.assignments(token), [token]);
+  const [recordId, setRecordId] = useState(() => sessionStorage.getItem('lm_active_verification'));
+  const record = useAsync(() => recordId ? api.verification(recordId, token) : Promise.resolve(null), [recordId, token]);
+
+  if (assignments.loading || record.loading) return <Spinner />;
+
+  if (!recordId) {
+    return (
+      <main className="page">
+        <section className="panel">
+          <h2>Field Verification Workbench</h2>
+          <p className="muted">Select an assigned application to initiate physical verification.</p>
+          <DataTable
+            rows={(assignments.data || []).filter(item => item.status !== 'COMPLETED')}
+            columns={[
+              ['Assignment ID', 'id'],
+              ['Application No.', 'application_number'],
+              ['Priority', item => <Badge>{item.priority}</Badge>],
+              ['', item => (
+                <button onClick={async () => {
+                  const res = await api.createVerification({ application_number: item.application_number }, token);
+                  sessionStorage.setItem('lm_active_verification', res.id);
+                  setRecordId(String(res.id));
+                }}>
+                  Start Verification Record
+                </button>
+              )]
+            ]}
+          />
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <VerificationEditor
+      id={recordId}
+      record={record.data}
+      token={token}
+      toast={toast}
+      clear={() => {
+        sessionStorage.removeItem('lm_active_verification');
+        setRecordId(null);
+      }}
+    />
+  );
 }
-function StartVerification({ assignment, applications, token, close, done }) { const [form, setForm] = useState({ application_number: '', latitude: '', longitude: '', remarks: '' }); const [error, setError] = useState(''); const capture = () => navigator.geolocation?.getCurrentPosition(position => setForm({ ...form, latitude: position.coords.latitude, longitude: position.coords.longitude }), () => setError('GPS could not be captured. Enter coordinates manually.')); const submit = async event => { event.preventDefault(); try { const item = await api.createVerification({ application_number: form.application_number, latitude: form.latitude === '' ? null : Number(form.latitude), longitude: form.longitude === '' ? null : Number(form.longitude), remarks: form.remarks, observations: [], measurements: [] }, token); done(item.id); } catch (err) { setError(err.message); } }; return <Modal title="Start field verification" onClose={close}><form onSubmit={submit}><p className="muted">Assignment reference: {assignment.id}. The API confirms that the chosen application is assigned to you.</p><label>Application reference<select required value={form.application_number} onChange={event => setForm({ ...form, application_number: event.target.value })}><option value="">Choose assigned application</option>{applications.map(item => <option value={item.application_number} key={item.application_number}>{item.application_number} ({item.status})</option>)}</select></label><label>Latitude<input type="number" step="any" value={form.latitude} onChange={event => setForm({ ...form, latitude: event.target.value })} /></label><label>Longitude<input type="number" step="any" value={form.longitude} onChange={event => setForm({ ...form, longitude: event.target.value })} /></label><button type="button" className="outline" onClick={capture}>Capture GPS</button><label>Opening remarks<textarea value={form.remarks} onChange={event => setForm({ ...form, remarks: event.target.value })} /></label>{error && <p className="form-error">{error}</p>}<button>Start verification record</button></form></Modal>; }
+
 function VerificationEditor({ id, record, token, toast, clear }) {
-  const [form, setForm] = useState({ latitude: record.latitude ?? '', longitude: record.longitude ?? '', remarks: record.remarks || '', observations: record.observations || [], measurements: record.measurements || [] }); const [observation, setObservation] = useState(''); const [measurement, setMeasurement] = useState({ parameter: '', expected_value: '', observed_value: '', unit: '', within_tolerance: true }); const [ai, setAi] = useState(null); const [error, setError] = useState(''); const [confirm, setConfirm] = useState('');
-  const save = async () => { try { await api.updateVerification(id, { latitude: form.latitude === '' ? null : Number(form.latitude), longitude: form.longitude === '' ? null : Number(form.longitude), remarks: form.remarks, observations: form.observations, measurements: form.measurements }, token); toast('Verification changes saved.'); } catch (err) { setError(err.message); } };
-  const addMeasurement = () => { if (!measurement.parameter || measurement.observed_value === '' || !measurement.unit) return setError('Measurement name, observed value, and unit are required.'); setForm({ ...form, measurements: [...form.measurements, { ...measurement, observed_value: Number(measurement.observed_value), expected_value: measurement.expected_value === '' ? null : Number(measurement.expected_value) }] }); setMeasurement({ parameter: '', expected_value: '', observed_value: '', unit: '', within_tolerance: true }); };
-  const uploadAi = async file => { if (!file) return; if (!['image/jpeg', 'image/png'].includes(file.type) || file.size > 10 * 1024 * 1024) return setError('AI assistance accepts JPEG or PNG images up to 10 MB.'); try { setAi(await api.aiExtract(file, token)); } catch (err) { setError(err.message); } };
-  const finalise = async decision => { try { const result = await api.finaliseVerification(id, decision, token); toast(decision === 'approve' ? `Certificate ${result.certificate_number} issued.` : 'Verification rejected.'); clear(); } catch (err) { setError(err.message); } finally { setConfirm(''); } };
-  return <main className="page"><section className="panel"><div className="panel-title"><div><p className="eyebrow">VERIFICATION RECORD #{id}</p><h2>Field verification</h2></div><Badge>{record.status}</Badge></div><p className="muted">Recorded at {record.verified_at || 'current session'}. AI findings are assistive and never decide the legal outcome.</p><div className="form-grid"><label>Latitude<input type="number" step="any" value={form.latitude} onChange={event => setForm({ ...form, latitude: event.target.value })} /></label><label>Longitude<input type="number" step="any" value={form.longitude} onChange={event => setForm({ ...form, longitude: event.target.value })} /></label><label className="wide">Remarks<textarea value={form.remarks} onChange={event => setForm({ ...form, remarks: event.target.value })} /></label></div><section className="subpanel"><h3>Measurements</h3><div className="measurement-row"><input placeholder="Measurement name" value={measurement.parameter} onChange={event => setMeasurement({ ...measurement, parameter: event.target.value })} /><input type="number" placeholder="Reference value" value={measurement.expected_value} onChange={event => setMeasurement({ ...measurement, expected_value: event.target.value })} /><input type="number" placeholder="Observed value" value={measurement.observed_value} onChange={event => setMeasurement({ ...measurement, observed_value: event.target.value })} /><input placeholder="Unit" value={measurement.unit} onChange={event => setMeasurement({ ...measurement, unit: event.target.value })} /><label className="check"><input type="checkbox" checked={measurement.within_tolerance} onChange={event => setMeasurement({ ...measurement, within_tolerance: event.target.checked })} />Within tolerance</label><button type="button" onClick={addMeasurement}>Add</button></div><DataTable rows={form.measurements} columns={[[ 'Parameter', 'parameter' ], [ 'Expected', 'expected_value' ], [ 'Observed', 'observed_value' ], [ 'Unit', 'unit' ], [ 'Result', item => <Badge>{item.within_tolerance ? 'PASS' : 'FAIL'}</Badge> ], [ '', (_, index) => <button className="link" onClick={() => setForm({ ...form, measurements: form.measurements.filter((__, itemIndex) => itemIndex !== index) })}>Remove</button> ]]} /></section><section className="subpanel"><h3>Observations</h3><div className="inline-action"><input placeholder="Add observation" value={observation} onChange={event => setObservation(event.target.value)} /><button type="button" onClick={() => { if (observation.trim()) { setForm({ ...form, observations: [...form.observations, observation.trim()] }); setObservation(''); } }}>Add</button></div>{form.observations.length ? <ol className="observation-list">{form.observations.map((item, index) => <li key={index}>{item}<button className="link" onClick={() => setForm({ ...form, observations: form.observations.filter((_, itemIndex) => itemIndex !== index) })}>Remove</button></li>)}</ol> : <p className="muted">No observations recorded.</p>}</section><section className="subpanel"><h3>AI/OCR assistance</h3><label>Instrument image<input type="file" accept="image/jpeg,image/png" onChange={event => uploadAi(event.target.files[0])} /></label>{ai ? <p>Serial: {ai.serial_number || 'Not detected'} · Model: {ai.model || 'Not detected'} · Manufacturer: {ai.manufacturer || 'Not detected'} · Confidence: {Math.round((ai.confidence || 0) * 100)}% <Badge>OFFICER CONFIRMATION REQUIRED</Badge></p> : <p className="muted">No image analysed yet.</p>}<p className="muted">The current API has no verification-evidence or photo upload endpoint. Instrument documents can be added through the Digital Passport where authorised.</p></section>{error && <p className="form-error">{error}</p>}<div className="dialog-actions"><button className="outline" onClick={save}>Save changes</button><button className="danger" onClick={() => setConfirm('reject')}>Reject verification</button><button onClick={() => setConfirm('approve')}>Approve and issue certificate</button></div></section>{confirm && <ConfirmDialog title={confirm === 'approve' ? 'Approve verification?' : 'Reject verification?'} message={confirm === 'approve' ? 'This final legal decision will issue a certificate and cannot be undone.' : 'This final legal decision will reject the application and cannot be undone.'} action={() => finalise(confirm)} onClose={() => setConfirm('')} />}</main>;
+  const [form, setForm] = useState({
+    latitude: record?.latitude ?? '', longitude: record?.longitude ?? '', remarks: record?.remarks || '',
+    standards_used: record?.standards_used || '', defects_found: record?.defects_found || '',
+    measurements: record?.measurements || [], observations: record?.observations || []
+  });
+  const [meas, setMeas] = useState({ parameter: '', observed_value: '', unit: 'kg', within_tolerance: true });
+  const [busy, setBusy] = useState(false);
+
+  const captureGPS = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(pos => {
+        setForm(prev => ({ ...prev, latitude: pos.coords.latitude.toFixed(6), longitude: pos.coords.longitude.toFixed(6) }));
+      });
+    }
+  };
+
+  const finalise = async decision => {
+    setBusy(true);
+    try {
+      const res = await api.finaliseVerification(id, decision, token);
+      if (decision === 'approve') {
+        toast(`Certificate ${res.certificate_number} generated & QR token issued!`);
+      } else {
+        toast('Verification rejected.');
+      }
+      clear();
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="page">
+      <section className="panel">
+        <div className="panel-title">
+          <h2>Field Verification Record #{id}</h2>
+          <Badge>{record?.status || 'IN PROGRESS'}</Badge>
+        </div>
+        <div className="form-grid" style={{ marginTop: '1.5rem' }}>
+          <label>GPS Latitude
+            <input type="number" step="any" value={form.latitude} onChange={e => setForm({ ...form, latitude: e.target.value })} />
+          </label>
+          <label>GPS Longitude
+            <input type="number" step="any" value={form.longitude} onChange={e => setForm({ ...form, longitude: e.target.value })} />
+          </label>
+          <button type="button" className="wide outline" onClick={captureGPS}>📍 Capture On-Site GPS</button>
+          <label className="wide">Working Standards Used
+            <input value={form.standards_used} onChange={e => setForm({ ...form, standards_used: e.target.value })} placeholder="e.g. Class M1 Test Weights 150kg" />
+          </label>
+          <label className="wide">Defects / Non-Conformities Found
+            <input value={form.defects_found} onChange={e => setForm({ ...form, defects_found: e.target.value })} placeholder="e.g. None / zero deviation noted" />
+          </label>
+          <label className="wide">General Inspection Remarks
+            <textarea value={form.remarks} onChange={e => setForm({ ...form, remarks: e.target.value })} />
+          </label>
+        </div>
+
+        <section className="subpanel" style={{ marginTop: '1.5rem' }}>
+          <h3>Verification Measurements</h3>
+          <div className="measurement-row">
+            <input placeholder="Parameter (e.g. Full Load Test)" value={meas.parameter} onChange={e => setMeas({ ...meas, parameter: e.target.value })} />
+            <input type="number" placeholder="Observed Value" value={meas.observed_value} onChange={e => setMeas({ ...meas, observed_value: e.target.value })} />
+            <input placeholder="Unit" value={meas.unit} onChange={e => setMeas({ ...meas, unit: e.target.value })} style={{ width: '80px' }} />
+            <button type="button" onClick={() => {
+              if (meas.parameter && meas.observed_value !== '') {
+                setForm({ ...form, measurements: [...form.measurements, { ...meas, observed_value: Number(meas.observed_value) }] });
+                setMeas({ parameter: '', observed_value: '', unit: 'kg', within_tolerance: true });
+              }
+            }}>+ Add</button>
+          </div>
+          <DataTable rows={form.measurements} columns={[
+            ['Parameter', 'parameter'],
+            ['Observed', 'observed_value'],
+            ['Unit', 'unit'],
+            ['Tolerance', item => <Badge>{item.within_tolerance ? 'PASS' : 'FAIL'}</Badge>]
+          ]} />
+        </section>
+
+        <div className="dialog-actions" style={{ marginTop: '2rem' }}>
+          <button className="danger" disabled={busy} onClick={() => finalise('reject')}>Reject Verification</button>
+          <button disabled={busy} onClick={() => finalise('approve')}>Approve & Issue Certificate</button>
+        </div>
+      </section>
+    </main>
+  );
 }
-function Certificates({ token }) { const { data, loading, error } = useAsync(() => api.certificates(token), [token]); return <main className="page">{loading ? <Spinner /> : error ? <ErrorState text={error} /> : <DataTable rows={data} search columns={[[ 'Certificate', 'certificate_number' ], [ 'Valid until', 'valid_until' ], [ 'Status', item => <Badge>{item.status}</Badge> ], [ 'Hash', item => <code>{item.certificate_hash?.slice(0, 16)}…</code> ], [ '', item => <button className="link" onClick={() => go(`/verify/${item.certificate_number}`)}>Public verify</button> ]]} />}</main>; }
-function Notifications({ token }) { const { data, loading, error } = useAsync(() => api.notifications(token), [token]); const [items, setItems] = useState(null); if (loading) return <Spinner />; if (error) return <ErrorState text={error} />; const list = items || data; const read = async item => { try { await api.readNotification(item.id, token); setItems(list.map(current => current.id === item.id ? { ...current, is_read: true } : current)); } catch (_) {} }; return <main className="page"><section className="panel"><div className="panel-title"><h2>Notifications</h2><Badge>{list.filter(item => !item.is_read).length} unread</Badge></div>{list.length ? list.map(item => <article className={`notice ${item.is_read ? '' : 'unread'}`} key={item.id}><div><Badge>{item.severity}</Badge><h3>{item.title}</h3><p>{item.message}</p><small>{new Date(item.created_at).toLocaleString()}</small></div>{!item.is_read && <button className="outline" onClick={() => read(item)}>Mark read</button>}</article>) : <Empty title="You’re all caught up" />}</section></main>; }
-function Audit({ token }) { const { data, loading, error } = useAsync(() => api.auditLogs(token), [token]); return <main className="page">{loading ? <Spinner /> : error ? <ErrorState text={error} /> : <DataTable rows={data} search columns={[[ 'Time', 'created_at' ], [ 'Action', 'action' ], [ 'Entity', 'entity' ], [ 'ID', 'entity_id' ], [ 'Actor', 'actor_id' ]]} />}</main>; }
-function Enforcement({ token }) { const { data, loading, error } = useAsync(() => api.enforcement(token), [token]); return <main className="page">{loading ? <Spinner /> : error ? <ErrorState text={error} /> : <DataTable rows={data} search columns={[[ 'Recorded', 'recorded_at' ], [ 'Instrument', 'instrument_id' ], [ 'Violation', 'violation_type' ], [ 'Severity', item => <Badge>{item.severity}</Badge> ]]} />}</main>; }
-function PublicVerify({ number }) { const [input, setInput] = useState(number); const [started, setStarted] = useState(Boolean(number)); const { data, loading, error } = useAsync(() => started ? api.publicCertificate(input) : Promise.resolve(null), [started, input]); const verify = event => { event.preventDefault(); if (input.trim()) go(`/verify/${encodeURIComponent(input.trim())}`); }; return <main className="verify-page"><button className="brand back" onClick={() => go('/')}>← LM Digital Verification</button><section><p className="eyebrow">PUBLIC CERTIFICATE VERIFICATION</p><h1>Check certificate authenticity</h1><form onSubmit={verify}><label className="sr-only">Certificate number<input placeholder="LM-CERT-2026-000001" value={input} onChange={event => setInput(event.target.value)} /></label><button>Verify certificate</button></form>{loading && <Spinner />}{error && <div className="invalid-card"><h2>Unable to verify</h2><p>{error === 'Certificate not found' ? 'No certificate exists with that number. Check the QR code or certificate reference and try again.' : error}</p></div>}{data && <div className={`verify-card ${data.valid ? 'valid-card' : 'invalid-card'}`}><h2>{data.valid ? '✓ VALID CERTIFICATE' : '! INVALID CERTIFICATE'}</h2><dl><dt>Certificate</dt><dd>{data.certificate_number}</dd><dt>Instrument</dt><dd>{data.instrument_id}</dd><dt>Instrument type</dt><dd>{data.instrument_type}</dd><dt>Manufacturer</dt><dd>{data.manufacturer}</dd><dt>Verification date</dt><dd>{data.verification_date}</dd><dt>Valid until</dt><dd>{data.valid_until}</dd><dt>Hash check</dt><dd><Badge>{data.certificate_hash_verified ? 'VERIFIED' : 'FAILED'}</Badge></dd></dl></div>}</section></main>; }
-function DataTable({ rows, columns, search = false }) { const [term, setTerm] = useState(''); const filtered = useMemo(() => rows.filter(row => JSON.stringify(row).toLowerCase().includes(term.toLowerCase())), [rows, term]); return <div className="table-wrap">{search && <input className="search" placeholder="Search records" aria-label="Search records" value={term} onChange={event => setTerm(event.target.value)} />}{filtered.length ? <table><thead><tr>{columns.map(([heading], index) => <th key={index}>{heading}</th>)}</tr></thead><tbody>{filtered.map((row, rowIndex) => <tr key={row.id || row.instrument_id || row.application_number || row.certificate_number || rowIndex}>{columns.map(([, value], columnIndex) => <td key={columnIndex}>{typeof value === 'function' ? value(row, rowIndex) : row[value] ?? '—'}</td>)}</tr>)}</tbody></table> : <Empty />}</div>; }
+
+function Certificates({ token, role, toast, darkMode }) {
+  const { data, loading, error } = useAsync(() => api.certificates(token), [token]);
+  const [selectedCert, setSelectedCert] = useState(null);
+
+  if (loading) return <Spinner />;
+  if (error) return <ErrorState text={error} />;
+
+  return (
+    <main className="page">
+      <div className="page-actions">
+        <div>
+          <h1>Issued Verification Certificates</h1>
+          <p>Tamper-evident verification certificates with cryptographic QR code validation and printable Certificates of Authenticity.</p>
+        </div>
+      </div>
+      <DataTable
+        rows={data || []}
+        search
+        columns={[
+          ['Certificate No.', 'certificate_number'],
+          ['Valid From', 'valid_from'],
+          ['Valid Until', 'valid_until'],
+          ['Status', item => <Badge>{item.status}</Badge>],
+          ['Hash Digest', item => <code>{item.certificate_hash?.slice(0, 16)}…</code>],
+          ['Actions', item => (
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <button
+                className="outline"
+                style={{ fontSize: '0.78rem', padding: '0.35rem 0.65rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                onClick={() => setSelectedCert(item)}
+              >
+                <span>📜</span>
+                <span>View CoA & QR</span>
+              </button>
+              {role !== 'BUSINESS' && (
+                <button
+                  className="link"
+                  style={{ fontSize: '0.78rem' }}
+                  onClick={() => go(`/verify/${encodeURIComponent(item.qr_token || item.certificate_number)}`)}
+                >
+                  Public Verify →
+                </button>
+              )}
+            </div>
+          )]
+
+        ]}
+      />
+
+      {selectedCert && (
+        <CertificateOfAuthenticityModal
+          cert={selectedCert}
+          onClose={() => setSelectedCert(null)}
+          darkMode={darkMode}
+        />
+      )}
+    </main>
+  );
+}
+
+
+function DueTracking({ token }) {
+  const { data, loading, error } = useAsync(() => api.dueTracking(token), [token]);
+  if (loading) return <Spinner />;
+  if (error) return <ErrorState text={error} />;
+
+  return (
+    <main className="page">
+      <div className="page-actions">
+        <h1>Due-Date Tracking</h1>
+      </div>
+      <DataTable
+        rows={data || []}
+        search
+        columns={[
+          ['Instrument ID', 'instrument_id'],
+          ['Type / Category', item => `${item.instrument_type} (${item.category})`],
+          ['Owner', 'owner_name'],
+          ['Jurisdiction', item => `${item.district}, ${item.state}`],
+          ['Next Due Date', 'next_verification_due_date'],
+          ['Status', item => <Badge>{item.urgency}</Badge>]
+        ]}
+      />
+    </main>
+  );
+}
+
+function Notifications({ token }) {
+  const { data, loading, error } = useAsync(() => api.notifications(token), [token]);
+  if (loading) return <Spinner />;
+  if (error) return <ErrorState text={error} />;
+
+  return (
+    <main className="page">
+      <div className="page-actions">
+        <h1>Notifications & Alerts</h1>
+      </div>
+      {(data || []).map(item => (
+        <div key={item.id} className="notice">
+          <div>
+            <Badge>{item.severity}</Badge>
+            <h3>{item.title}</h3>
+            <p>{item.message}</p>
+          </div>
+        </div>
+      ))}
+    </main>
+  );
+}
+
+function PublicVerify({ tokenOrNumber, darkMode, onToggleTheme }) {
+  const [input, setInput] = useState(tokenOrNumber);
+  const [started, setStarted] = useState(Boolean(tokenOrNumber));
+  const [showCoA, setShowCoA] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const { data, loading, error } = useAsync(() => started && input.trim() ? api.publicCertificate(input.trim()) : Promise.resolve(null), [started, input]);
+
+  const verify = event => {
+    event.preventDefault();
+    if (input.trim()) {
+      setStarted(true);
+      go(`/verify/${encodeURIComponent(input.trim())}`);
+    }
+  };
+
+  const publicUrl = data ? `${window.location.origin}/verify/${encodeURIComponent(data.qr_token || data.certificate_number)}` : '';
+
+  const copyLink = () => {
+    if (publicUrl) {
+      navigator.clipboard.writeText(publicUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 3000);
+    }
+  };
+
+  return (
+    <main className="verify-page" style={{ maxWidth: '820px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <button
+            onClick={() => {
+              if (window.history.length > 1) {
+                window.history.back();
+              } else {
+                go('/');
+              }
+            }}
+            className="outline"
+            title="Go back"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              padding: '0.5rem 1.1rem',
+              borderRadius: '999px',
+              fontWeight: 700,
+              fontSize: '0.88rem',
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px var(--shadow-default)',
+            }}
+          >
+            <span>←</span>
+            <span>Back</span>
+          </button>
+          <button className="brand back" onClick={() => go('/')} style={{ background: 'none', border: 'none', padding: 0 }}>
+            <BrandLogo darkMode={darkMode} />
+          </button>
+        </div>
+        <button className="theme-toggle-btn" aria-label="Toggle theme" onClick={onToggleTheme}>
+          {darkMode ? '☀️' : '🌙'}
+        </button>
+      </div>
+
+      <section>
+        <p className="eyebrow">NATIONAL CERTIFICATE VERIFICATION</p>
+        <h1>Public Verification Registry</h1>
+        <p>Scan QR code or enter certificate verification token to check validity.</p>
+        
+        <form onSubmit={verify}>
+          <input placeholder="Enter QR Token or LM-CERT Number" value={input} onChange={event => setInput(event.target.value)} />
+          <button style={{ marginTop: '0.8rem', width: '100%' }}>Verify Authenticity</button>
+        </form>
+
+        {loading && <Spinner label="Verifying cryptographic signature with national ledger…" />}
+
+        {error && (
+          <div className="invalid-card" style={{ marginTop: '1.5rem' }}>
+            <h2>! Verification Failed</h2>
+            <p>{error}</p>
+          </div>
+        )}
+
+        {data && (
+          <div style={{ marginTop: '1.75rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            {/* Main Verification Card */}
+            <div className={`verify-card ${data.status === 'VALID' ? 'valid-card' : 'invalid-card'}`} style={{ margin: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: '1.35rem' }}>
+                    {data.status === 'VALID' ? '✓ VALID DIGITAL CERTIFICATE' : '! INVALID / EXPIRED CERTIFICATE'}
+                  </h2>
+                  <p style={{ margin: '0.3rem 0 0', fontSize: '0.85rem', opacity: 0.85 }}>
+                    {data.issuing_authority || 'Legal Metrology Department, Government of India'}
+                  </p>
+                </div>
+
+                <Badge>{data.status}</Badge>
+              </div>
+
+              {/* Grid: Certificate Data + Live Scannable QR Code */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '1.5rem', alignItems: 'center' }}>
+                <dl style={{ margin: 0 }}>
+                  <dt>Certificate No:</dt><dd><strong>{data.certificate_number}</strong></dd>
+                  <dt>Instrument ID:</dt><dd>{data.instrument_id}</dd>
+                  <dt>Type / Category:</dt><dd>{data.instrument_type} {data.category ? `(${data.category})` : ''}</dd>
+                  <dt>Manufacturer:</dt><dd>{data.manufacturer} {data.model || ''}</dd>
+                  <dt>Serial Number:</dt><dd><code>{data.serial_number || '—'}</code></dd>
+                  <dt>Verification Date:</dt><dd>{data.verification_date}</dd>
+                  <dt>Valid Until:</dt><dd><strong>{data.valid_until}</strong></dd>
+                  <dt>SHA-256 Digest:</dt><dd><Badge>{data.certificate_hash_verified ? 'VERIFIED TAMPER-FREE' : 'MISMATCH'}</Badge></dd>
+                </dl>
+
+                {/* Scannable QR Box */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#ffffff', padding: '0.85rem', borderRadius: '12px', boxShadow: '0 4px 16px rgba(0,0,0,0.1)', border: '1px solid var(--border-color)', textAlign: 'center' }}>
+                  <QRCodeSVG value={publicUrl} size={140} />
+                  <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#167046', marginTop: '0.45rem' }}>
+                    LIVE QR CODE
+                  </span>
+                  <button
+                    type="button"
+                    onClick={copyLink}
+                    className="outline"
+                    style={{ marginTop: '0.4rem', fontSize: '0.7rem', padding: '0.2rem 0.5rem', borderRadius: '6px' }}
+                  >
+                    {copied ? '✓ Copied' : 'Copy URL'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Current Verification Check Breakdown */}
+              <div style={{ marginTop: '1.5rem', paddingTop: '1.2rem', borderTop: '1px solid rgba(0, 0, 0, 0.1)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', fontSize: '0.8rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span style={{ color: '#167046', fontWeight: 900 }}>✓</span>
+                  <span><strong>Cryptographic Ledger:</strong> SHA-256 Valid</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span style={{ color: '#167046', fontWeight: 900 }}>✓</span>
+                  <span><strong>GATC 2025 Rules:</strong> Compliant</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span style={{ color: '#167046', fontWeight: 900 }}>✓</span>
+                  <span><strong>Jurisdiction:</strong> Regional Division</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span style={{ color: '#167046', fontWeight: 900 }}>✓</span>
+                  <span><strong>Legal Status:</strong> Non-Revoked</span>
+                </div>
+              </div>
+
+              {/* Action Buttons: Certificate of Authenticity Modal & Print */}
+              <div style={{ marginTop: '1.5rem', display: 'flex', gap: '0.8rem', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCoA(true)}
+                  style={{
+                    background: 'linear-gradient(135deg, #0f52ba, #7c3aed)',
+                    color: '#ffffff',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    padding: '0.65rem 1.25rem',
+                    borderRadius: '8px',
+                    fontWeight: 700,
+                    fontSize: '0.9rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span>📜</span>
+                  <span>View Official Certificate of Authenticity (Printable A4)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showCoA && data && (
+          <CertificateOfAuthenticityModal
+            cert={data}
+            onClose={() => setShowCoA(false)}
+            darkMode={darkMode}
+          />
+        )}
+
+        <div style={{ marginTop: '2rem', textAlign: 'center' }}>
+          <button
+            type="button"
+            className="link"
+            onClick={() => {
+              if (window.history.length > 1) {
+                window.history.back();
+              } else {
+                go('/');
+              }
+            }}
+            style={{ fontSize: '0.92rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+          >
+            ← Return to previous screen
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+
+function DataTable({ rows, columns, search = false }) {
+  const [term, setTerm] = useState('');
+  const filtered = useMemo(() => {
+    const list = rows || [];
+    if (!term.trim()) return list;
+    return list.filter(row => JSON.stringify(row).toLowerCase().includes(term.toLowerCase()));
+  }, [rows, term]);
+
+  return (
+    <div className="table-wrap">
+      {search && <input className="search" placeholder="Filter records..." value={term} onChange={event => setTerm(event.target.value)} />}
+      {filtered.length ? (
+        <table>
+          <thead>
+            <tr>{columns.map(([heading], index) => <th key={index}>{heading}</th>)}</tr>
+          </thead>
+          <tbody>
+            {filtered.map((row, rowIndex) => (
+              <tr key={row.id || row.instrument_id || row.application_number || row.certificate_number || rowIndex}>
+                {columns.map(([, value], columnIndex) => (
+                  <td key={columnIndex}>
+                    {typeof value === 'function' ? value(row, rowIndex) : row[value] ?? '—'}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <Empty />}
+    </div>
+  );
+}

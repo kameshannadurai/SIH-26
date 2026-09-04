@@ -1,4 +1,4 @@
 -r requirements.txt
-alembic==1.16.5
-pytest==8.3.5
-httpx2
+alembic>=1.13.0
+pytest>=8.0.0
+httpx>=0.27.0

@@ -1,0 +1,5 @@
+import { createContext,useContext,useEffect,useState } from 'react';
+import { api } from '../api/client';
+const Context=createContext(null);
+export function AuthProvider({children}){const [token,setToken]=useState(localStorage.getItem('lm_token')), [user,setUser]=useState(null),[loading,setLoading]=useState(Boolean(token));useEffect(()=>{if(!token){setLoading(false);return;}api.me(token).then(setUser).catch(()=>{localStorage.removeItem('lm_token');setToken(null)}).finally(()=>setLoading(false));},[token]);const login=async(email,password)=>{const result=await api.login(email,password);localStorage.setItem('lm_token',result.access_token);setToken(result.access_token);const profile=await api.me(result.access_token);setUser(profile);return profile};const register=async(fullName,email,password)=>{await api.register({full_name:fullName,email,password,role:'BUSINESS'})};return <Context.Provider value={{token,user,loading,login,register,logout:()=>{localStorage.removeItem('lm_token');setToken(null);setUser(null)}}}>{children}</Context.Provider>}
+export const useAuth=()=>useContext(Context);

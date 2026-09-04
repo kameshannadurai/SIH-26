@@ -32,8 +32,11 @@ class Instrument(Base):
     status: Mapped[str] = mapped_column(String(32), default="ACTIVE", index=True)
     registration_date: Mapped[date] = mapped_column(Date, default=date.today)
     next_verification_due_date: Mapped[date | None] = mapped_column(Date, index=True)
+    last_verification_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    installation_details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     applications: Mapped[list["VerificationApplication"]] = relationship(back_populates="instrument")
+    certificates: Mapped[list["VerificationCertificate"]] = relationship(back_populates="instrument")
     documents: Mapped[list["InstrumentDocument"]] = relationship(back_populates="instrument", cascade="all, delete-orphan")
     photos: Mapped[list["InstrumentPhoto"]] = relationship(back_populates="instrument", cascade="all, delete-orphan")
 
@@ -106,6 +109,10 @@ class VerificationRecord(Base):
     remarks: Mapped[str | None] = mapped_column(Text)
     result: Mapped[str | None] = mapped_column(String(20), index=True)
     status: Mapped[str] = mapped_column(String(30), default="IN_PROGRESS")
+    evidence_paths: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    evidence_metadata: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    standards_used: Mapped[str | None] = mapped_column(Text, nullable=True)
+    defects_found: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     observations: Mapped[list["VerificationObservation"]] = relationship(back_populates="verification", cascade="all, delete-orphan")
     measurements: Mapped[list["VerificationMeasurement"]] = relationship(back_populates="verification", cascade="all, delete-orphan")
@@ -137,17 +144,22 @@ class VerificationCertificate(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     certificate_number: Mapped[str] = mapped_column(String(40), unique=True, index=True)
     instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), index=True)
-    application_id: Mapped[int] = mapped_column(ForeignKey("verification_applications.id"), unique=True)
+    application_id: Mapped[int] = mapped_column(ForeignKey("verification_applications.id"), index=True)
     verification_id: Mapped[int] = mapped_column(ForeignKey("verification_records.id"), unique=True)
     valid_from: Mapped[date] = mapped_column(Date)
     valid_until: Mapped[date] = mapped_column(Date, index=True)
     result: Mapped[str] = mapped_column(String(20))
     certificate_hash: Mapped[str] = mapped_column(String(64), unique=True)
     signed_hash: Mapped[str | None] = mapped_column(Text)
-    qr_token: Mapped[str] = mapped_column(String(64), unique=True)
+    qr_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     pdf_path: Mapped[str | None] = mapped_column(String(500))
     status: Mapped[str] = mapped_column(String(20), default="VALID", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    issuing_officer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    revocation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    instrument: Mapped[Instrument] = relationship(back_populates="certificates")
 
 
 class CertificateVerification(Base):
@@ -210,3 +222,140 @@ class EnforcementRecord(Base):
 
 Index("ix_assignments_officer_schedule", VerificationAssignment.assigned_officer_id, VerificationAssignment.scheduled_at)
 UniqueConstraint(VerificationAssignment.application_id, VerificationAssignment.assigned_officer_id, name="uq_assignment_application_officer")
+
+
+# ==============================================================================
+# SMART DIGITAL ECOSYSTEM UPGRADE MODELS (ADDITIVE)
+# ==============================================================================
+
+class OfficerAvailability(Base):
+    __tablename__ = "officer_availability"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    officer_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    day_of_week: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0=Mon, 6=Sun
+    start_time: Mapped[str] = mapped_column(String(10), default="09:00")
+    end_time: Mapped[str] = mapped_column(String(10), default="17:00")
+    slot_duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    max_daily_inspections: Mapped[int] = mapped_column(Integer, default=8)
+    break_start: Mapped[str | None] = mapped_column(String(10), default="13:00", nullable=True)
+    break_end: Mapped[str | None] = mapped_column(String(10), default="14:00", nullable=True)
+    specific_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    is_unavailable: Mapped[bool] = mapped_column(Boolean, default=False)
+    location_jurisdiction: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class InspectionSlot(Base):
+    __tablename__ = "inspection_slots"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    officer_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    application_id: Mapped[int | None] = mapped_column(ForeignKey("verification_applications.id"), nullable=True, index=True)
+    booked_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    slot_date: Mapped[date] = mapped_column(Date, index=True)
+    start_time: Mapped[str] = mapped_column(String(10))  # e.g. "09:00"
+    end_time: Mapped[str] = mapped_column(String(10))    # e.g. "10:00"
+    status: Mapped[str] = mapped_column(String(20), default="AVAILABLE", index=True)  # AVAILABLE, LOCKED, BOOKED, COMPLETED, CANCELLED
+    lock_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CitizenComplaint(Base):
+    __tablename__ = "citizen_complaints"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    complaint_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)  # COMP-TN-2026-000001
+    citizen_name: Mapped[str] = mapped_column(String(150))
+    id_reference_token: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    verified_phone: Mapped[str] = mapped_column(String(30), index=True)
+    shop_name: Mapped[str] = mapped_column(String(200), index=True)
+    shop_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(String(100), index=True)
+    district: Mapped[str] = mapped_column(String(100), index=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    instrument_id: Mapped[int | None] = mapped_column(ForeignKey("instruments.id"), nullable=True, index=True)
+    instrument_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    complaint_category: Mapped[str] = mapped_column(String(100), default="INCORRECT_WEIGHT")
+    violation_type: Mapped[str] = mapped_column(String(150))
+    description: Mapped[str] = mapped_column(Text)
+    severity: Mapped[str] = mapped_column(String(20), default="MEDIUM", index=True)  # LOW, MEDIUM, HIGH, CRITICAL
+    status: Mapped[str] = mapped_column(String(30), default="SUBMITTED", index=True)  # SUBMITTED, AUTO_CLASSIFIED, ASSIGNED, IN_INVESTIGATION, ACTION_TAKEN, RESOLVED, DISMISSED
+    assigned_officer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    is_repeat_offender: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    risk_score: Mapped[int] = mapped_column(Integer, default=20)
+    resolution_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_taken: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entry_method: Mapped[str] = mapped_column(String(20), default="PORTAL")  # QR_SCAN or PORTAL
+    qr_token_used: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    evidence: Mapped[list["ComplaintEvidence"]] = relationship(back_populates="complaint", cascade="all, delete-orphan")
+    timeline: Mapped[list["ComplaintTimeline"]] = relationship(back_populates="complaint", cascade="all, delete-orphan")
+
+
+class ComplaintEvidence(Base):
+    __tablename__ = "complaint_evidence"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    complaint_id: Mapped[int] = mapped_column(ForeignKey("citizen_complaints.id"), index=True)
+    storage_path: Mapped[str] = mapped_column(String(500))
+    filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(100))
+    evidence_type: Mapped[str] = mapped_column(String(50), default="PHOTO")  # SHOP_PHOTO, INSTRUMENT_PHOTO, READING_PHOTO, RECEIPT, DOCUMENT, VIDEO
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    complaint: Mapped[CitizenComplaint] = relationship(back_populates="evidence")
+
+
+class ComplaintTimeline(Base):
+    __tablename__ = "complaint_timelines"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    complaint_id: Mapped[int] = mapped_column(ForeignKey("citizen_complaints.id"), index=True)
+    action: Mapped[str] = mapped_column(String(100))
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    actor_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    actor_role: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    old_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    new_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    complaint: Mapped[CitizenComplaint] = relationship(back_populates="timeline")
+
+
+class OTPVerification(Base):
+    __tablename__ = "otp_verifications"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    phone_number: Mapped[str] = mapped_column(String(30), index=True)
+    otp_code: Mapped[str] = mapped_column(String(10))
+    verification_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    attempts_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ShopRegistry(Base):
+    __tablename__ = "shop_registry"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    shop_name: Mapped[str] = mapped_column(String(200), index=True)
+    registration_number: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True, index=True)
+    owner_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    contact_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(String(100), index=True)
+    district: Mapped[str] = mapped_column(String(100), index=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_score: Mapped[int] = mapped_column(Integer, default=10, index=True)
+    complaint_count: Mapped[int] = mapped_column(Integer, default=0)
+    violation_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_inspection_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    is_flagged: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+

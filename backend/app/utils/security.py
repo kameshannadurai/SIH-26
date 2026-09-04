@@ -54,3 +54,6 @@ def decode_access_token(token: str) -> dict:
         )
     except JWTError:
         raise ValueError("Invalid or expired token")
+
+
+decode_token = decode_access_token

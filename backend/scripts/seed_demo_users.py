@@ -35,19 +35,35 @@ from app.utils.security import hash_password
 def main() -> None:
     password_hash = hash_password(os.environ["DEMO_USER_PASSWORD"])
     accounts = (
-        ("LMO", os.environ["DEMO_LMO_EMAIL"], "Demo Legal Metrology Officer"),
-        ("GATC", os.environ["DEMO_GATC_EMAIL"], "Demo GATC Officer"),
-        ("ADMIN", os.environ["DEMO_ADMIN_EMAIL"], "Demo Platform Administrator"),
+        ("LMO", os.environ["DEMO_LMO_EMAIL"], "Demo Legal Metrology Officer", "Tamil Nadu", "Chennai"),
+        ("GATC", os.environ["DEMO_GATC_EMAIL"], "Demo GATC Officer", "Maharashtra", "Mumbai"),
+        ("ADMIN", os.environ["DEMO_ADMIN_EMAIL"], "Demo Platform Administrator", "Delhi", "New Delhi"),
     )
     db = SessionLocal()
     try:
-        for role, email, full_name in accounts:
+        for role, email, full_name, state, district in accounts:
             existing = db.query(User).filter(User.email == email).first()
             if existing:
-                print(f"Unchanged: {email} ({existing.role})")
+                existing.state = state
+                existing.district = district
+                existing.hashed_password = password_hash
+                existing.is_active = True
+                print(f"Updated user and password: {email} ({existing.role} in {district}, {state})")
                 continue
-            db.add(User(full_name=full_name, email=email, hashed_password=password_hash, role=role, is_active=True))
-            print(f"Created: {email} ({role})")
+            db.add(
+                User(
+                    full_name=full_name,
+                    email=email,
+                    hashed_password=password_hash,
+                    role=role,
+                    is_active=True,
+                    state=state,
+                    district=district,
+                    organization_name="Legal Metrology Regional Division",
+                    contact_number="+91 98765 43210"
+                )
+            )
+            print(f"Created: {email} ({role} in {district}, {state})")
         db.commit()
     except Exception:
         db.rollback()
