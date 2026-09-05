@@ -8,6 +8,10 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./legal_metrology.db"
 
+# Handle PostgreSQL scheme for SQLAlchemy 2.0 (Render / Supabase compatibility)
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(
         DATABASE_URL,

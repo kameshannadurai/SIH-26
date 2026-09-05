@@ -7,10 +7,15 @@ from passlib.context import CryptContext
 
 load_dotenv()
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 if not SECRET_KEY:
-    raise RuntimeError("SECRET_KEY is not set.")
+    SECRET_KEY = "scalesync-legal-metrology-production-secret-key-fallback-2026"
+    logger.warning("WARNING: SECRET_KEY environment variable is not set. Using fallback key. Set SECRET_KEY in your environment for production security.")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60

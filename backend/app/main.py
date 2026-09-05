@@ -97,12 +97,9 @@ async def unhandled_error(_: Request, __: Exception):
     return JSONResponse(status_code=500, content={"success": False, "error_code": "INTERNAL_ERROR", "message": "An unexpected error occurred"})
 
 
-@app.get("/")
-def root():
-    return {
-        "message": "Legal Metrology API is running",
-        "status": "success",
-    }
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 
 @app.get("/health")
@@ -120,3 +117,59 @@ def database_test(db: Session = Depends(get_db)):
         "database": "connected",
         "test": result,
     }
+
+
+# ==============================================================================
+# SPA FRONTEND & STATIC ASSETS SERVING (FOR UNIFIED RENDER PRODUCTION CONTAINER)
+# ==============================================================================
+
+def find_web_dist_dir() -> Path | None:
+    candidates = [
+        Path(__file__).resolve().parent.parent / "web_dist",
+        Path("/app/app_backend/web_dist"),
+        Path("/app/web_dist"),
+        Path(__file__).resolve().parents[2] / "web" / "dist",
+        Path("web_dist"),
+    ]
+    for p in candidates:
+        if p.exists() and (p / "index.html").exists():
+            return p
+    return None
+
+
+WEB_DIST_DIR = find_web_dist_dir()
+
+if WEB_DIST_DIR:
+    # Mount assets folder for bundled JS, CSS, images
+    assets_dir = WEB_DIST_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    # Serve direct static files from dist or fall back to SPA index.html
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa_frontend(full_path: str):
+        # Exclude backend API routes, documentation and health endpoints
+        api_prefixes = (
+            "api", "auth", "instruments", "applications", "assignments",
+            "verifications", "certificates", "notifications", "enforcement",
+            "public", "admin", "gatc-rules", "complaints", "scheduling",
+            "ai", "storage", "health", "database-test", "docs", "openapi.json", "redoc"
+        )
+        if full_path.startswith(api_prefixes):
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+        # Direct file check (e.g. favicon.ico, logo.png, robots.txt)
+        file_path = WEB_DIST_DIR / full_path
+        if full_path and file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+
+        # Fallback to SPA index.html for client-side routing
+        return FileResponse(WEB_DIST_DIR / "index.html")
+else:
+    @app.get("/", include_in_schema=False)
+    def root():
+        return {
+            "message": "Legal Metrology API is running",
+            "status": "success",
+            "frontend": "standalone mode"
+        }
