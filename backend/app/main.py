@@ -119,6 +119,16 @@ def database_test(db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/seed-demo")
+def seed_demo_endpoint(db: Session = Depends(get_db)):
+    try:
+        from app.services.demo_seeder import seed_demo_database
+        res = seed_demo_database(db, force=True)
+        return {"status": "success", "result": res}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 # ==============================================================================
 # SPA FRONTEND & STATIC ASSETS SERVING (FOR UNIFIED RENDER PRODUCTION CONTAINER)
 # ==============================================================================
