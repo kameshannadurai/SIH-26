@@ -1,9 +1,12 @@
-from pydantic import BaseModel, EmailStr, ConfigDict, Field, field_validator
+import re
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+EMAIL_REGEX = re.compile(r"^[\w\.\+\-]+@[\w\-]+(\.[\w\-]+)+$")
 
 
 class UserCreate(BaseModel):
     full_name: str
-    email: EmailStr
+    email: str = Field(min_length=5, max_length=150)
     password: str = Field(min_length=8, max_length=128)
     role: str = "BUSINESS"
     organization_name: str | None = None
@@ -14,6 +17,14 @@ class UserCreate(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     role_specific_info: dict | None = None
+
+    @field_validator("email")
+    @classmethod
+    def validate_email_format(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not EMAIL_REGEX.match(value):
+            raise ValueError("Invalid email address format")
+        return value
 
     @field_validator("role")
     @classmethod
@@ -29,7 +40,7 @@ class UserResponse(BaseModel):
 
     id: int
     full_name: str
-    email: EmailStr
+    email: str
     role: str
     is_active: bool
     organization_name: str | None = None
