@@ -2,8 +2,11 @@ import { useState, useEffect } from 'react';
 import { api } from '../api/client';
 import { Badge, Spinner, Toast } from './UI';
 import { INDIAN_STATES, INDIAN_STATES_AND_DISTRICTS } from '../data/indianLocations';
+import { useTranslation } from '../i18n/LanguageContext';
+import { LanguageSelector } from './LanguageSelector';
 
-export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode }) {
+export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode, onToggleTheme }) {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState('FILE'); // 'FILE' or 'TRACK'
 
   // Wizard state
@@ -11,14 +14,35 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState('');
 
-  // Citizen Identity & OTP
+  // Citizen Identity & Dual OTP
   const [citizenName, setCitizenName] = useState('');
   const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [idReference, setIdReference] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [verificationToken, setVerificationToken] = useState('');
-  const [isPhoneVerified, setIsPhoneVerified] = useState(false);
-  const [demoOtpNotice, setDemoOtpNotice] = useState('');
+  const [isVerified, setIsVerified] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const [expiryTime, setExpiryTime] = useState(0);
+  const [otpError, setOtpError] = useState('');
+
+  // Countdown timer for OTP expiration & resend cooldown
+  useEffect(() => {
+    let timer;
+    if (cooldown > 0 || expiryTime > 0) {
+      timer = setInterval(() => {
+        setCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+        setExpiryTime((prev) => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [cooldown, expiryTime]);
+
+  const formatTimer = (sec) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
 
   // Shop & Instrument
   const [shopQuery, setShopQuery] = useState('');
@@ -58,13 +82,17 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
     const qr = params.get('qr') || initialQrToken;
     if (qr) {
       setQrToken(qr);
-      // Attempt to prefill certificate / instrument details
+      // Pre-fill certificate / instrument details
       api.publicCertificate(qr).then(cert => {
         if (cert) {
-          setShopName(cert.owner_name || 'Registered Establishment');
-          setState(cert.state || 'Tamil Nadu');
-          setDistrict(cert.district || 'Chennai');
-          setToast('Instrument details auto-filled from scanned QR code.');
+          if (cert.owner_name) setShopName(cert.owner_name);
+          if (cert.owner_address) setShopAddress(cert.owner_address);
+          if (cert.state) setState(cert.state);
+          if (cert.district) setDistrict(cert.district);
+          if (cert.instrument_type || cert.certificate_number) {
+            setDescription(prev => prev || `Grievance regarding verified instrument: ${cert.instrument_type || 'Commercial Instrument'} (Cert No: ${cert.certificate_number}, Serial No: ${cert.serial_number || 'N/A'}, Category: ${cert.category || 'Standard'}). Discrepancy observed in weights/measures.`);
+          }
+          setToast(`✓ Scanned instrument linked: ${cert.instrument_type || 'Instrument'} (${cert.certificate_number})`);
         }
       }).catch(() => {});
     }
@@ -83,44 +111,60 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
 
   // Handle OTP Send
   const handleSendOtp = async (e) => {
-    e.preventDefault();
-    if (!phone || phone.length < 10) {
+    if (e && e.preventDefault) e.preventDefault();
+    const cleanPhone = phone.replace(/\D/g, '');
+    if (!cleanPhone || cleanPhone.length < 10) {
       setToast('Please enter a valid 10-digit mobile number');
       return;
     }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(email.trim())) {
+      setToast('Please enter a valid email address');
+      return;
+    }
+
     setLoading(true);
+    setOtpError('');
     try {
-      const res = await api.sendOtp(phone, citizenName);
+      const res = await api.sendOtp(cleanPhone, email.trim(), citizenName);
       setVerificationToken(res.verification_token);
-      if (res.demo_otp_code) {
-        setDemoOtpNotice(`Demo OTP: ${res.demo_otp_code} (auto-filled for quick testing)`);
-        setOtpCode(res.demo_otp_code);
-      }
-      setToast(res.message);
+      setCooldown(res.cooldown_seconds || 60);
+      setExpiryTime(res.expires_in_seconds || 300);
+      setOtpCode('');
+      setToast(res.message || 'OTP successfully sent to your Mobile and Email.');
     } catch (err) {
-      setToast(err.message);
+      setOtpError(err.message || 'Failed to send OTP.');
+      setToast(err.message || 'Failed to send OTP.');
     } finally {
       setLoading(false);
     }
   };
 
+  // Handle OTP Resend
+  const handleResendOtp = async () => {
+    if (cooldown > 0 || loading) return;
+    await handleSendOtp();
+  };
+
   // Handle OTP Verify
   const handleVerifyOtp = async (e) => {
-    e.preventDefault();
-    if (!otpCode) {
-      setToast('Please enter the OTP');
+    if (e && e.preventDefault) e.preventDefault();
+    if (!otpCode || otpCode.trim().length !== 6) {
+      setOtpError('Please enter the complete 6-digit OTP.');
+      setToast('Please enter the complete 6-digit OTP.');
       return;
     }
     setLoading(true);
+    setOtpError('');
     try {
-      const res = await api.verifyOtp(verificationToken, otpCode);
+      const res = await api.verifyOtp(verificationToken, otpCode.trim());
       if (res.is_verified) {
-        setIsPhoneVerified(true);
-        setToast('Mobile number verified! Proceeding to shop details.');
-        setStep(2);
+        setIsVerified(true);
+        setToast('✅ Mobile & Email Verified successfully!');
       }
     } catch (err) {
-      setToast(err.message);
+      setOtpError(err.message || 'Invalid OTP. Please try again.');
+      setToast(err.message || 'Invalid OTP. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -157,7 +201,8 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
       const payload = {
         citizen_name: citizenName || 'Anonymous Citizen',
         id_reference: idReference || undefined,
-        verified_phone: phone,
+        verified_phone: phone.replace(/\D/g, ''),
+        verified_email: email.trim(),
         verification_token: verificationToken,
         shop_name: shopName,
         shop_address: shopAddress,
@@ -212,10 +257,29 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
 
       <div className="complaint-portal-container">
         <header className="complaint-header">
-          <div className="govt-header-badge">Government of India • Legal Metrology Division</div>
-          <h1>Public Citizen Complaint & Redressal Portal</h1>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <div className="govt-header-badge" style={{ margin: 0 }}>
+              {t('complaint_header_badge')}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <LanguageSelector />
+              {onToggleTheme && (
+                <button
+                  type="button"
+                  className="theme-toggle-btn"
+                  aria-label="Toggle theme"
+                  onClick={onToggleTheme}
+                  title="Toggle Light / Dark Theme"
+                >
+                  {darkMode ? '☀️' : '🌙'}
+                </button>
+              )}
+            </div>
+          </div>
+
+          <h1>{t('complaint_title')}</h1>
           <p className="complaint-subtitle">
-            Report inaccurate weighing balances, short measures, non-standard weights, missing verification seals, or dual MRP overcharging under the Legal Metrology Act, 2009.
+            {t('complaint_subtitle')}
           </p>
 
           <div className="portal-tabs-row">
@@ -223,17 +287,17 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
               className={`portal-tab ${activeTab === 'FILE' ? 'active' : ''}`}
               onClick={() => setActiveTab('FILE')}
             >
-              📝 File New Complaint
+              {t('tab_file_complaint')}
             </button>
             <button
               className={`portal-tab ${activeTab === 'TRACK' ? 'active' : ''}`}
               onClick={() => setActiveTab('TRACK')}
             >
-              🔍 Track Complaint Status
+              {t('tab_track_complaint')}
             </button>
             {onBackToHome && (
               <button className="portal-tab outline" onClick={onBackToHome}>
-                ← Back to Portal Home
+                ← {t('back')}
               </button>
             )}
           </div>
@@ -248,15 +312,15 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
               <div className="wizard-stepper">
                 <div className={`step-item ${step >= 1 ? 'active' : ''} ${step > 1 ? 'completed' : ''}`}>
                   <span className="step-num">1</span>
-                  <span className="step-title">Citizen Verification</span>
+                  <span className="step-title">{t('step_identity')}</span>
                 </div>
                 <div className={`step-item ${step >= 2 ? 'active' : ''} ${step > 2 ? 'completed' : ''}`}>
                   <span className="step-num">2</span>
-                  <span className="step-title">Shop & Location</span>
+                  <span className="step-title">{t('step_shop')}</span>
                 </div>
                 <div className={`step-item ${step >= 3 ? 'active' : ''}`}>
                   <span className="step-num">3</span>
-                  <span className="step-title">Violation & Evidence</span>
+                  <span className="step-title">{t('step_evidence')}</span>
                 </div>
               </div>
             )}
@@ -264,15 +328,28 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
             {/* STEP 1: CITIZEN IDENTITY & OTP */}
             {step === 1 && (
               <div className="wizard-step-content">
-                <h2>Step 1: Mobile OTP Verification</h2>
+                <h2>{t('identity_title')}</h2>
                 <p className="step-desc">
-                  To prevent fraudulent filings and facilitate status updates via SMS, please verify your mobile number. Your identity details are securely stored.
+                  {t('identity_desc')}
                 </p>
 
-                {!verificationToken ? (
+                {qrToken && (
+                  <div className="qr-scanned-alert" style={{ marginBottom: '1.25rem', border: '1px solid var(--color-primary)', background: 'var(--bg-active)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 800, color: 'var(--color-primary)' }}>
+                      <span>📷</span>
+                      <span>Instrument Details Pre-filled from QR Code</span>
+                    </div>
+                    <p style={{ margin: '0.3rem 0 0', fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+                      Commercial establishment: <strong>{shopName || 'Registered Trade Name'}</strong> ({district}, {state}). Complete verified citizen OTP authentication below to file your official grievance.
+                    </p>
+                  </div>
+                )}
+
+                {/* STAGE A: ENTER MOBILE & EMAIL */}
+                {!isVerified && !verificationToken && (
                   <form onSubmit={handleSendOtp} className="complaint-form">
                     <label>
-                      <span>Your Full Name (Optional)</span>
+                      <span>{t('full_name')}</span>
                       <input
                         type="text"
                         placeholder="e.g. Ramesh Kumar"
@@ -282,7 +359,7 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
                     </label>
 
                     <label>
-                      <span>10-Digit Mobile Number *</span>
+                      <span>{t('phone_number')} *</span>
                       <input
                         type="tel"
                         required
@@ -291,10 +368,23 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
                         onChange={(e) => setPhone(e.target.value)}
                         maxLength={10}
                       />
+                      <small className="field-hint">A 6-digit OTP will be dispatched to this mobile number.</small>
                     </label>
 
                     <label>
-                      <span>Masked Aadhaar / ID Reference (Optional)</span>
+                      <span>{t('email_address')} *</span>
+                      <input
+                        type="email"
+                        required
+                        placeholder="e.g. citizen@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                      />
+                      <small className="field-hint">Official complaint tracking details & OTP will be sent here.</small>
+                    </label>
+
+                    <label>
+                      <span>{t('gov_id_ref')}</span>
                       <input
                         type="text"
                         placeholder="e.g. XXXX-XXXX-1234 or Voter ID"
@@ -304,68 +394,150 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
                       <small className="field-hint">Do not enter full 12-digit Aadhaar. Enter masked 4 digits or ID number.</small>
                     </label>
 
+                    {otpError && (
+                      <div className="otp-error-banner">
+                        <span>⚠️ {otpError}</span>
+                      </div>
+                    )}
+
                     <button type="submit" className="primary full-width" disabled={loading}>
-                      {loading ? 'Sending OTP…' : 'Send Verification OTP →'}
+                      {loading ? 'Generating & Sending OTP…' : t('send_otp_btn')}
                     </button>
                   </form>
-                ) : (
-                  <form onSubmit={handleVerifyOtp} className="complaint-form">
+                )}
+
+                {/* STAGE B: ENTER & VERIFY OTP SCREEN */}
+                {!isVerified && verificationToken && (
+                  <form onSubmit={handleVerifyOtp} className="complaint-form otp-verify-card">
                     <div className="otp-sent-banner">
-                      <p>An OTP code has been dispatched to <strong>+91 {phone}</strong></p>
-                      {demoOtpNotice && <p className="demo-otp-badge">{demoOtpNotice}</p>}
+                      <div className="otp-sent-header">
+                        <span className="otp-sent-icon">📬</span>
+                        <div>
+                          <h4>OTP Dispatched</h4>
+                          <p>
+                            A 6-digit verification code has been dispatched to:
+                          </p>
+                        </div>
+                      </div>
+                      <div className="otp-destination-badges">
+                        <span className="dest-badge">📱 +91 {phone.length >= 10 ? `${phone.slice(0, 2)}******${phone.slice(-2)}` : phone}</span>
+                        <span className="dest-badge">✉️ {email.includes('@') ? `${email.split('@')[0].slice(0, 1)}***@${email.split('@')[1]}` : email}</span>
+                      </div>
+                    </div>
+
+                    <div className="otp-timer-row">
+                      {expiryTime > 0 ? (
+                        <span className="otp-timer-active">
+                          ⏳ OTP expires in: <strong>{formatTimer(expiryTime)}</strong>
+                        </span>
+                      ) : (
+                        <span className="otp-timer-expired">
+                          ⚠️ OTP expired. Please request a new OTP.
+                        </span>
+                      )}
                     </div>
 
                     <label>
-                      <span>Enter 6-Digit OTP Code *</span>
+                      <span>{t('otp_code_label')} *</span>
                       <input
                         type="text"
                         required
-                        placeholder="e.g. 123456"
+                        placeholder="• • • • • •"
                         value={otpCode}
-                        onChange={(e) => setOtpCode(e.target.value)}
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                          setOtpCode(val);
+                        }}
                         maxLength={6}
-                        className="otp-input-field"
+                        className="otp-input-field large-digits"
+                        autoFocus
                       />
+                      <small className="field-hint">Enter the 6-digit numeric code received on your phone or email.</small>
                     </label>
+
+                    {otpError && (
+                      <div className="otp-error-banner">
+                        <span>⚠️ {otpError}</span>
+                      </div>
+                    )}
 
                     <div className="form-actions-row">
                       <button
                         type="button"
                         className="outline"
-                        onClick={() => setVerificationToken('')}
+                        onClick={() => {
+                          setVerificationToken('');
+                          setOtpError('');
+                          setOtpCode('');
+                        }}
                       >
-                        Change Number
+                        ← Change Details
                       </button>
-                      <button type="submit" className="primary" disabled={loading}>
-                        {loading ? 'Verifying…' : 'Verify & Continue →'}
+
+                      <button
+                        type="button"
+                        className="outline"
+                        onClick={handleResendOtp}
+                        disabled={cooldown > 0 || loading}
+                      >
+                        {cooldown > 0 ? `Resend OTP in ${cooldown}s` : `🔄 ${t('resend_otp_btn')}`}
+                      </button>
+
+                      <button
+                        type="submit"
+                        className="primary"
+                        disabled={loading || otpCode.length !== 6}
+                      >
+                        {loading ? 'Verifying…' : t('verify_otp_btn')}
                       </button>
                     </div>
                   </form>
                 )}
+
+                {/* STAGE C: VERIFIED SUCCESS - PROCEED TO STEP 2 */}
+                {isVerified && (
+                  <div className="otp-verified-success-box">
+                    <div className="verified-check-icon">✓</div>
+                    <h3>Identity Verified</h3>
+                    <p>{t('otp_verified_msg')}</p>
+                    <div className="verified-creds-summary">
+                      <div><span>Mobile:</span> <strong>+91 {phone}</strong></div>
+                      <div><span>Email:</span> <strong>{email}</strong></div>
+                      {citizenName && <div><span>Name:</span> <strong>{citizenName}</strong></div>}
+                    </div>
+
+                    <button
+                      type="button"
+                      className="primary full-width"
+                      onClick={() => setStep(2)}
+                      style={{ marginTop: '1.25rem' }}
+                    >
+                      {t('step_shop')} →
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* STEP 2: SHOP & LOCATION DETAILS */}
+            {/* STEP 2: SHOP & VIOLATION */}
             {step === 2 && (
               <div className="wizard-step-content">
-                <h2>Step 2: Establishment & Geolocation</h2>
-                <p className="step-desc">
-                  Identify the shop or merchant. You can search registered establishments or enter unlisted shop details manually.
-                </p>
+                <h2>{t('shop_title')}</h2>
+                <p className="step-desc">{t('shop_desc')}</p>
 
                 {qrToken && (
                   <div className="qr-scanned-alert">
-                    <span>📱 QR Code Linked: <code>{qrToken.slice(0, 16)}...</code></span>
-                    <small>Pre-filled from instrument digital certificate.</small>
+                    <span>📱 Scanned QR Certificate Token: <strong>{qrToken}</strong></span>
+                    <small>Establishment and instrument details have been pre-filled.</small>
                   </div>
                 )}
 
                 <div className="complaint-form">
                   <label>
-                    <span>Search Registered Shops / Establishments</span>
+                    <span>{t('search_shop_label')}</span>
                     <input
                       type="text"
-                      placeholder="Type shop name to search registry..."
+                      placeholder={t('search_shop_placeholder')}
                       value={shopQuery}
                       onChange={(e) => setShopQuery(e.target.value)}
                     />
@@ -381,179 +553,181 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
                             setSelectedShop(s);
                             setShopName(s.shop_name);
                             setShopAddress(s.address || '');
-                            setState(s.state);
-                            setDistrict(s.district);
+                            if (s.state) setState(s.state);
+                            if (s.district) setDistrict(s.district);
                             if (s.latitude) setLatitude(s.latitude);
                             if (s.longitude) setLongitude(s.longitude);
                             setShopSearchResults([]);
-                            setToast(`Selected: ${s.shop_name}`);
+                            setShopQuery('');
                           }}
                         >
                           <strong>{s.shop_name}</strong>
-                          <small>{s.address ? `${s.address}, ` : ''}{s.district}, {s.state}</small>
-                          {s.is_flagged && <span className="repeat-tag">⚠️ High Risk / Flagged</span>}
+                          <small>{s.address} · {s.district}, {s.state}</small>
+                          {s.is_repeat_offender && (
+                            <span className="repeat-tag">⚠️ High Risk Repeat Offender</span>
+                          )}
                         </div>
                       ))}
                     </div>
                   )}
 
                   <label>
-                    <span>Shop / Trader Name *</span>
+                    <span>{t('shop_name')} *</span>
                     <input
                       type="text"
                       required
-                      placeholder="e.g. Sree Murugan Sweets & Groceries"
+                      placeholder="e.g. Sree Murugan Provision Store"
                       value={shopName}
                       onChange={(e) => setShopName(e.target.value)}
                     />
                   </label>
 
-                  <div className="grid-2">
-                    <label>
-                      <span>State *</span>
-                      <select value={state} onChange={(e) => {
-                        setState(e.target.value);
-                        const firstDist = INDIAN_STATES_AND_DISTRICTS[e.target.value]?.[0] || '';
-                        setDistrict(firstDist);
-                      }}>
-                        {INDIAN_STATES.map(st => <option key={st} value={st}>{st}</option>)}
-                      </select>
-                    </label>
-
-                    <label>
-                      <span>District *</span>
-                      <select value={district} onChange={(e) => setDistrict(e.target.value)}>
-                        {availableDistricts.map(d => <option key={d} value={d}>{d}</option>)}
-                      </select>
-                    </label>
-                  </div>
-
                   <label>
-                    <span>Full Address / Landmark</span>
-                    <textarea
-                      rows={2}
-                      placeholder="e.g. No. 14, Main Market Road, Opp. Bus Stand"
+                    <span>{t('shop_address')} *</span>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. No 14, Gandhi Bazaar, Near Central Bus Stand"
                       value={shopAddress}
                       onChange={(e) => setShopAddress(e.target.value)}
                     />
                   </label>
 
-                  {/* GPS Coordinates Capture */}
-                  <div className="gps-capture-box">
-                    <div className="gps-info">
-                      <strong>📍 Geotagged Location</strong>
-                      <p>{gpsStatus || 'Capture current GPS coordinates to assist the LMO inspection squad.'}</p>
-                      {latitude && (
-                        <div className="gps-coords-badge">
-                          LAT: {latitude.toFixed(6)} | LNG: {longitude.toFixed(6)} ✓
-                        </div>
-                      )}
-                    </div>
-                    <button type="button" className="outline" onClick={captureGps}>
-                      {latitude ? 'Recapture GPS' : '📍 Auto-Capture GPS'}
-                    </button>
+                  <div className="grid-2">
+                    <label>
+                      <span>{t('state_label')} *</span>
+                      <select value={state} onChange={(e) => { setState(e.target.value); setDistrict(''); }}>
+                        {INDIAN_STATES.map(st => (
+                          <option key={st} value={st}>{st}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label>
+                      <span>{t('district_label')} *</span>
+                      <select value={district} onChange={(e) => setDistrict(e.target.value)} required>
+                        <option value="">Select District</option>
+                        {availableDistricts.map(d => (
+                          <option key={d} value={d}>{d}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <label>
+                    <span>{t('violation_type')} *</span>
+                    <select value={violationType} onChange={(e) => setViolationType(e.target.value)}>
+                      <option value="Short Weight / Short Measure">Short Weight / Short Measure (Inaccurate Scale)</option>
+                      <option value="Unverified / Unstamped Scale">Unverified / Unstamped Scale (No Verification Seal)</option>
+                      <option value="Tampered Electronic Scale">Tampered Electronic Scale / Counterweight Manipulation</option>
+                      <option value="Dual MRP / Overcharging Over MRP">Dual MRP / Overcharging Above Printed MRP</option>
+                      <option value="Non-Standard Package / Missing Declarations">Non-Standard Package / Missing Manufacturer Declarations</option>
+                      <option value="Non-Standard Weighing Instrument">Use of Unapproved Non-Standard Weighing Instrument</option>
+                    </select>
+                  </label>
+
+                  <div className="grid-2">
+                    <label>
+                      <span>{t('violation_category')}</span>
+                      <select value={complaintCategory} onChange={(e) => setComplaintCategory(e.target.value)}>
+                        <option value="INCORRECT_WEIGHT">Incorrect Weight</option>
+                        <option value="UNSTAMPED_INSTRUMENT">Unstamped Instrument</option>
+                        <option value="TAMPERED_SEAL">Tampered Seal</option>
+                        <option value="OVERCHARGING_MRP">Overcharging Above MRP</option>
+                        <option value="PACKAGE_COMMODITY_VIOLATION">Package Commodity Violation</option>
+                        <option value="OTHER">Other Violation</option>
+                      </select>
+                    </label>
+
+                    <label>
+                      <span>{t('severity_level')}</span>
+                      <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
+                        <option value="LOW">Low (Single occurrence)</option>
+                        <option value="MEDIUM">Medium (Repeated short-measure)</option>
+                        <option value="HIGH">High (Active consumer fraud / deliberate tampering)</option>
+                        <option value="CRITICAL">Critical (Large commercial fraud / petrol pump error)</option>
+                      </select>
+                    </label>
                   </div>
 
                   <div className="form-actions-row">
                     <button type="button" className="outline" onClick={() => setStep(1)}>
-                      ← Back
+                      ← {t('back')}
                     </button>
                     <button
                       type="button"
                       className="primary"
-                      disabled={!shopName.trim()}
+                      disabled={!shopName || !shopAddress || !district}
                       onClick={() => setStep(3)}
                     >
-                      Continue to Violation Details →
+                      {t('next_evidence_btn')}
                     </button>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* STEP 3: VIOLATION & EVIDENCE UPLOAD */}
+            {/* STEP 3: EVIDENCE & DESCRIPTION */}
             {step === 3 && (
               <div className="wizard-step-content">
-                <h2>Step 3: Violation Description & Photo Evidence</h2>
-                <p className="step-desc">
-                  Provide details of the non-compliance and upload photos of the scale display, broken seals, or receipts.
-                </p>
+                <h2>{t('evidence_title')}</h2>
+                <p className="step-desc">{t('evidence_desc')}</p>
 
                 <div className="complaint-form">
-                  <div className="grid-2">
-                    <label>
-                      <span>Violation Category *</span>
-                      <select
-                        value={violationType}
-                        onChange={(e) => {
-                          setViolationType(e.target.value);
-                          if (e.target.value.includes('Seal')) setComplaintCategory('TAMPERED_SEAL');
-                          else if (e.target.value.includes('MRP')) setComplaintCategory('OVERCHARGING_MRP');
-                          else setComplaintCategory('INCORRECT_WEIGHT');
-                        }}
-                      >
-                        <option value="Short Weight in Retail Goods">Short Weight in Retail Goods (Delivering less quantity)</option>
-                        <option value="Unverified / Unstamped Weighing Scale">Unverified / Unstamped Weighing Scale (No LM Stamp)</option>
-                        <option value="Tampered Weights or Measurement Device">Tampered Weights or Measurement Device (Modified/Magnetized)</option>
-                        <option value="Dual MRP or Overcharging Above MRP">Dual MRP or Overcharging Above MRP (Packaged Commodity)</option>
-                        <option value="Inaccurate Petrol / Fuel Dispenser">Inaccurate Petrol / Fuel Dispenser Delivery</option>
-                        <option value="Medical Instrument Inaccuracy">Medical Instrument Inaccuracy (Sphygmomanometer/Thermometer)</option>
-                        <option value="Non-Standard Units Used">Non-Standard Units Used (e.g. Tola, Seer, Foot)</option>
-                      </select>
-                    </label>
-
-                    <label>
-                      <span>Urgency / Severity</span>
-                      <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
-                        <option value="LOW">Low (Minor discrepancy)</option>
-                        <option value="MEDIUM">Medium (Regular commercial trade violation)</option>
-                        <option value="HIGH">High (Widespread consumer fraud)</option>
-                        <option value="CRITICAL">Critical (Deliberate tampering / Safety hazard)</option>
-                      </select>
-                    </label>
-                  </div>
-
                   <label>
-                    <span>Detailed Description of Violation *</span>
+                    <span>{t('detailed_desc')} *</span>
                     <textarea
                       rows={4}
                       required
-                      placeholder="Describe what occurred, what was weighed/measured, expected vs delivered quantity, and trader response..."
+                      placeholder="Describe what occurred, items weighed, discrepancy noted (e.g. 1kg sugar weighed only 850g on standard scale)..."
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
                     />
                   </label>
 
-                  {/* Multi-Photo Evidence Upload */}
+                  {/* GPS Coordinates Capture */}
+                  <div className="gps-capture-box">
+                    <div>
+                      <strong>📍 Geotag Shop Location (GPS Coordinates)</strong>
+                      <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        {gpsStatus || 'Click below to capture exact GPS coordinates of the shop for direct LMO on-site inspection.'}
+                      </p>
+                      {latitude && longitude && (
+                        <div className="gps-coords-badge">
+                          Lat: {latitude.toFixed(5)}, Lng: {longitude.toFixed(5)}
+                        </div>
+                      )}
+                    </div>
+                    <button type="button" className="outline" onClick={captureGps}>
+                      {t('capture_gps_btn')}
+                    </button>
+                  </div>
+
+                  {/* Photo / Video Evidence Upload */}
                   <label>
-                    <span>Upload Supporting Photos / Evidence (Optional)</span>
+                    <span>{t('evidence_photos')} (Optional)</span>
                     <input
                       type="file"
                       multiple
-                      accept="image/jpeg,image/png,application/pdf,video/mp4"
+                      accept="image/*,video/*"
                       onChange={(e) => {
                         if (e.target.files) {
                           setEvidenceFiles(Array.from(e.target.files));
                         }
                       }}
                     />
-                    <small className="field-hint">Upload photos of the weighing machine, display readings, or bill receipt (JPEG, PNG, PDF up to 15MB).</small>
+                    <small className="field-hint">Attach photos of the faulty balance, display panel, receipt, or packaging.</small>
                   </label>
 
                   {evidenceFiles.length > 0 && (
                     <div className="uploaded-files-preview">
-                      <strong>Selected Evidence Files ({evidenceFiles.length}):</strong>
-                      <ul>
-                        {evidenceFiles.map((f, i) => (
-                          <li key={i}>📁 {f.name} ({(f.size / 1024).toFixed(1)} KB)</li>
-                        ))}
-                      </ul>
+                      <strong>Attached {evidenceFiles.length} file(s):</strong> {evidenceFiles.map(f => f.name).join(', ')}
                     </div>
                   )}
 
                   <div className="form-actions-row">
                     <button type="button" className="outline" onClick={() => setStep(2)}>
-                      ← Back
+                      ← {t('back')}
                     </button>
                     <button
                       type="button"
@@ -561,46 +735,42 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
                       disabled={loading || description.length < 10}
                       onClick={handleSubmitComplaint}
                     >
-                      {loading ? 'Submitting Complaint…' : '⚖️ Submit Official Complaint'}
+                      {loading ? 'Submitting Grievance…' : t('submit_complaint_btn')}
                     </button>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* STEP 4: SUBMITTED CONFIRMATION CARD */}
+            {/* STEP 4: CONFIRMATION & COMPLAINT TICKET */}
             {step === 4 && submittedComplaint && (
               <div className="wizard-confirmation-card">
                 <div className="conf-icon">✓</div>
-                <h2>Complaint Registered Successfully</h2>
-                <p className="conf-sub">
-                  Your complaint has been logged and assigned to the Regional Legal Metrology Officer for immediate inspection.
+                <h2>{t('complaint_success_title')}</h2>
+                <p>
+                  Your grievance has been officially registered and auto-routed to the jurisdictional Legal Metrology Office.
                 </p>
 
                 <div className="complaint-ref-card">
                   <div className="ref-row">
-                    <span>Complaint ID:</span>
-                    <strong>{submittedComplaint.complaint_number}</strong>
+                    <span>{t('complaint_ref_no')}:</span>
+                    <strong style={{ color: '#2563eb', fontSize: '1.15rem' }}>{submittedComplaint.complaint_number}</strong>
                   </div>
                   <div className="ref-row">
-                    <span>Establishment:</span>
-                    <span>{submittedComplaint.shop_name}</span>
-                  </div>
-                  <div className="ref-row">
-                    <span>Jurisdiction:</span>
-                    <span>{submittedComplaint.district}, {submittedComplaint.state}</span>
-                  </div>
-                  <div className="ref-row">
-                    <span>Violation Type:</span>
-                    <span>{submittedComplaint.violation_type}</span>
-                  </div>
-                  <div className="ref-row">
-                    <span>Initial Status:</span>
+                    <span>{t('status_label')}:</span>
                     <Badge>{submittedComplaint.status}</Badge>
+                  </div>
+                  <div className="ref-row">
+                    <span>{t('assigned_jurisdiction')}:</span>
+                    <strong>{submittedComplaint.assigned_officer_name || `${district} Legal Metrology Office`}</strong>
+                  </div>
+                  <div className="ref-row">
+                    <span>{t('expected_response')}:</span>
+                    <span>{t('within_48_hours')}</span>
                   </div>
                   {submittedComplaint.is_repeat_offender && (
                     <div className="repeat-alert-box">
-                      ⚠️ <strong>Repeat Offender Flagged:</strong> High priority inspection assigned to the regional enforcement squad.
+                      ⚠️ <strong>Priority Investigation:</strong> This establishment has prior recorded violations. An immediate inspection warrant has been flagged.
                     </div>
                   )}
                 </div>
@@ -615,20 +785,23 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
                       handleTrackComplaint({ preventDefault: () => {} });
                     }}
                   >
-                    Track Progress in Real-Time →
+                    {t('tab_track_complaint')}
                   </button>
                   <button
                     className="outline"
                     onClick={() => {
                       setStep(1);
-                      setSubmittedComplaint(null);
+                      setIsVerified(false);
                       setVerificationToken('');
-                      setIsPhoneVerified(false);
-                      setEvidenceFiles([]);
+                      setOtpCode('');
+                      setShopName('');
+                      setShopAddress('');
                       setDescription('');
+                      setEvidenceFiles([]);
+                      setSubmittedComplaint(null);
                     }}
                   >
-                    File Another Complaint
+                    {t('file_another_btn')}
                   </button>
                 </div>
               </div>
@@ -637,60 +810,61 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 2: TRACK EXISTING COMPLAINT */}
+        {/* TAB 2: TRACK COMPLAINT STATUS */}
         {/* ========================================================================= */}
         {activeTab === 'TRACK' && (
           <div className="wizard-card">
-            <h2>Track Redressal Status</h2>
+            <h2>{t('tab_track_complaint')}</h2>
             <p className="step-desc">
-              Enter your Complaint ID (e.g. <code>COMP-TN-2026-000001</code>) and verified phone number to inspect the inspection timeline and officer findings.
+              Enter your official complaint reference number and registered mobile number to view live investigation progress.
             </p>
 
-            <form onSubmit={handleTrackComplaint} className="complaint-track-form">
-              <div className="grid-2">
-                <label>
-                  <span>Complaint Number *</span>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. COMP-TN-2026-000001"
-                    value={trackNumber}
-                    onChange={(e) => setTrackNumber(e.target.value)}
-                  />
-                </label>
-                <label>
-                  <span>Registered Mobile (Last 4 Digits or Full)</span>
-                  <input
-                    type="tel"
-                    placeholder="e.g. 9876543210"
-                    value={trackPhone}
-                    onChange={(e) => setTrackPhone(e.target.value)}
-                  />
-                </label>
-              </div>
-              <button type="submit" className="primary" disabled={trackingLoading || !trackNumber.trim()}>
-                {trackingLoading ? 'Searching…' : '🔍 Track Status'}
+            <form onSubmit={handleTrackComplaint} className="complaint-form">
+              <label>
+                <span>{t('track_input_label')} *</span>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. LM-CMP-TN-2026-000001"
+                  value={trackNumber}
+                  onChange={(e) => setTrackNumber(e.target.value)}
+                />
+              </label>
+
+              <label>
+                <span>{t('track_phone_label')} (Optional)</span>
+                <input
+                  type="tel"
+                  placeholder="e.g. 9876543210"
+                  value={trackPhone}
+                  onChange={(e) => setTrackPhone(e.target.value)}
+                />
+              </label>
+
+              <button type="submit" className="primary" disabled={trackingLoading || !trackNumber}>
+                {trackingLoading ? 'Fetching Status…' : t('track_action_btn')}
               </button>
             </form>
 
-            {trackingLoading && <Spinner label="Retrieving official complaint record…" />}
-
+            {/* TRACKED COMPLAINT RECORD DISPLAY */}
             {trackedRecord && (
               <div className="tracked-details-container">
                 <div className="tracked-header-bar">
                   <div>
-                    <h3>{trackedRecord.shop_name}</h3>
-                    <p>{trackedRecord.district}, {trackedRecord.state} • Violation: {trackedRecord.violation_type}</p>
+                    <h3>{trackedRecord.complaint_number}</h3>
+                    <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      Filed on {new Date(trackedRecord.created_at).toLocaleDateString()} · {trackedRecord.shop_name} ({trackedRecord.district}, {trackedRecord.state})
+                    </p>
                   </div>
                   <Badge>{trackedRecord.status}</Badge>
                 </div>
 
-                {/* Progress Steps Timeline */}
+                {/* Status Progress Stepper */}
                 <div className="complaint-progress-timeline">
                   {['SUBMITTED', 'ASSIGNED', 'IN_INVESTIGATION', 'ACTION_TAKEN', 'RESOLVED'].map((st, idx) => {
-                    const statusOrder = ['SUBMITTED', 'ASSIGNED', 'IN_INVESTIGATION', 'ACTION_TAKEN', 'RESOLVED'];
-                    const currentIdx = statusOrder.indexOf(trackedRecord.status);
-                    const isDone = idx <= currentIdx;
+                    const statuses = ['SUBMITTED', 'ASSIGNED', 'IN_INVESTIGATION', 'ACTION_TAKEN', 'RESOLVED'];
+                    const currentIdx = statuses.indexOf(trackedRecord.status);
+                    const isDone = currentIdx >= idx || (trackedRecord.status === 'DISMISSED' && idx === 0);
                     return (
                       <div key={st} className={`comp-step ${isDone ? 'done' : ''}`}>
                         <div className="comp-step-circle">{idx + 1}</div>
@@ -700,29 +874,31 @@ export function CitizenComplaintPortal({ initialQrToken, onBackToHome, darkMode 
                   })}
                 </div>
 
-                {/* Official Action & Notes */}
+                {/* Officer Findings / Action Taken Box */}
                 {trackedRecord.action_taken && (
                   <div className="official-action-box">
-                    <strong>⚖️ Officer Action & Findings:</strong>
-                    <p>{trackedRecord.action_taken}</p>
+                    <h4>⚖️ Official Inspection Finding & Action Taken</h4>
+                    <p style={{ margin: '0.35rem 0' }}>{trackedRecord.action_taken}</p>
                     {trackedRecord.resolution_notes && (
-                      <small>Resolution Notes: {trackedRecord.resolution_notes}</small>
+                      <small style={{ display: 'block', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                        Penalty / Legal Citation: {trackedRecord.resolution_notes}
+                      </small>
                     )}
                   </div>
                 )}
 
-                {/* Timeline History */}
+                {/* Timeline History Entries */}
                 {trackedRecord.timeline && trackedRecord.timeline.length > 0 && (
                   <div className="timeline-history-list">
-                    <h4>Investigation Log</h4>
-                    {trackedRecord.timeline.map(item => (
-                      <div key={item.id} className="timeline-item-card">
+                    <h4>Official Audit & Investigation Log</h4>
+                    {trackedRecord.timeline.map((entry) => (
+                      <div key={entry.id} className="timeline-item-card">
                         <div className="item-meta">
-                          <strong>{item.action.replace('_', ' ')}</strong>
-                          <small>{new Date(item.created_at).toLocaleString()}</small>
+                          <strong>{entry.status}</strong>
+                          <span>{new Date(entry.recorded_at).toLocaleString()}</span>
                         </div>
-                        {item.actor_name && <p className="actor-line">Officer: {item.actor_name} ({item.actor_role})</p>}
-                        {item.notes && <p className="notes-line">{item.notes}</p>}
+                        <div className="actor-line">Action by: {entry.actor_name} ({entry.actor_role})</div>
+                        {entry.notes && <p className="notes-line">{entry.notes}</p>}
                       </div>
                     ))}
                   </div>

@@ -271,6 +271,7 @@ class CitizenComplaint(Base):
     citizen_name: Mapped[str] = mapped_column(String(150))
     id_reference_token: Mapped[str | None] = mapped_column(String(100), nullable=True)
     verified_phone: Mapped[str] = mapped_column(String(30), index=True)
+    verified_email: Mapped[str | None] = mapped_column(String(150), nullable=True, index=True)
     shop_name: Mapped[str] = mapped_column(String(200), index=True)
     shop_address: Mapped[str | None] = mapped_column(Text, nullable=True)
     state: Mapped[str] = mapped_column(String(100), index=True)
@@ -331,11 +332,16 @@ class OTPVerification(Base):
     __tablename__ = "otp_verifications"
     id: Mapped[int] = mapped_column(primary_key=True)
     phone_number: Mapped[str] = mapped_column(String(30), index=True)
-    otp_code: Mapped[str] = mapped_column(String(10))
+    email: Mapped[str | None] = mapped_column(String(150), index=True, nullable=True)
+    otp_code: Mapped[str] = mapped_column(String(128))  # Securely hashed SHA-256 OTP digest
     verification_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_used: Mapped[bool] = mapped_column(Boolean, default=False)  # Prevents reuse for multiple complaints
     attempts_count: Mapped[int] = mapped_column(Integer, default=0)
+    resend_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_sent_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

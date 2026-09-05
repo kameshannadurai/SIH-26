@@ -159,6 +159,10 @@ class PublicCertificateOut(BaseModel):
     qr_token: str
     issuing_authority: str = "Legal Metrology Department, Government of India"
     revocation_reason: str | None = None
+    owner_name: str | None = None
+    owner_address: str | None = None
+    state: str | None = None
+    district: str | None = None
 
 class DueTrackingItem(BaseModel):
     instrument_id: str

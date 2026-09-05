@@ -37,24 +37,31 @@ router = APIRouter(prefix="/scheduling", tags=["Smart Scheduling"])
 def set_officer_availability(
     payload: OfficerAvailabilityCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_role("LMO", "GATC", "ADMIN"))
+    user: User = Depends(require_role("ADMIN"))
 ):
+    """Centralized schedule management: only ADMIN can configure or edit officer availability hours."""
+    target_officer_id = payload.officer_id or user.id
+    target_officer = db.query(User).filter_by(id=target_officer_id).first()
+    if not target_officer or target_officer.role not in {"LMO", "GATC"}:
+        raise HTTPException(400, "Valid LMO or GATC officer must be specified for availability configuration")
+
     # If specific_date is provided, check if override exists
     existing = None
     if payload.specific_date:
         existing = db.query(OfficerAvailability).filter(
-            OfficerAvailability.officer_id == user.id,
+            OfficerAvailability.officer_id == target_officer_id,
             OfficerAvailability.specific_date == payload.specific_date
         ).first()
     elif payload.day_of_week is not None:
         existing = db.query(OfficerAvailability).filter(
-            OfficerAvailability.officer_id == user.id,
+            OfficerAvailability.officer_id == target_officer_id,
             OfficerAvailability.day_of_week == payload.day_of_week,
             OfficerAvailability.specific_date == None
         ).first()
 
+    fields_to_update = payload.model_dump(exclude={"officer_id"})
     if existing:
-        for k, v in payload.model_dump().items():
+        for k, v in fields_to_update.items():
             setattr(existing, k, v)
         existing.updated_at = datetime.utcnow()
         db.commit()
@@ -62,8 +69,8 @@ def set_officer_availability(
         return existing
 
     availability = OfficerAvailability(
-        officer_id=user.id,
-        **payload.model_dump()
+        officer_id=target_officer_id,
+        **fields_to_update
     )
     db.add(availability)
     db.commit()

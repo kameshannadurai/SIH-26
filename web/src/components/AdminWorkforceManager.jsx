@@ -36,7 +36,11 @@ export function AdminWorkforceManager({ token }) {
   const handleOverrideSubmit = async (e) => {
     e.preventDefault();
     if (!overrideAppNum.trim() || !overrideOfficerId || !overrideReason.trim()) {
-      setToast('Please fill all fields.');
+      setToast('Please fill in all required fields.');
+      return;
+    }
+    if (overrideReason.trim().length < 3) {
+      setToast('Justification / Reason must be at least 3 characters.');
       return;
     }
     setSubmittingOverride(true);

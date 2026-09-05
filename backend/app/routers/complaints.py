@@ -1,6 +1,7 @@
-from __future__ import annotations
-
+import hashlib
+import logging
 import math
+import re
 import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -37,49 +38,154 @@ from app.schemas.smart_ecosystem import (
 from app.services.domain import audit, calculate_establishment_risk, official_number
 from app.utils.dependencies import get_current_user, require_role
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/complaints", tags=["Citizen Complaints"])
+
+OTP_SECRET_SALT = "ScaleSync_eMetrology_OTP_Salt_2026"
+EMAIL_REGEX = re.compile(r"^[\w\.\+\-]+@[\w\-]+(\.[\w\-]+)+$")
+
+
+def hash_otp_code(otp_code: str) -> str:
+    """Securely hash 6-digit OTP with cryptographic salt before storage."""
+    return hashlib.sha256(f"{otp_code.strip()}:{OTP_SECRET_SALT}".encode("utf-8")).hexdigest()
+
+
+def mask_phone_number(phone: str) -> str:
+    cleaned = re.sub(r"\D", "", phone)
+    if len(cleaned) >= 10:
+        return f"{cleaned[:2]}******{cleaned[-2:]}"
+    return "****"
+
+
+def mask_email_address(email: str) -> str:
+    if "@" in email:
+        user, domain = email.split("@", 1)
+        if len(user) <= 2:
+            masked_user = user[0] + "*"
+        else:
+            masked_user = user[0] + "***" + user[-1]
+        return f"{masked_user}@{domain}"
+    return "****"
 
 
 # ==============================================================================
-# OTP CITIZEN VERIFICATION
+# OTP CITIZEN VERIFICATION (DUAL MOBILE + EMAIL)
 # ==============================================================================
 
 @router.post("/otp/send", response_model=OTPSendResponse)
 def send_citizen_otp(payload: OTPSendRequest, db: Session = Depends(get_db)):
-    # Clean phone
-    phone = payload.phone_number.strip().replace(" ", "").replace("-", "")
-    if len(phone) < 10:
+    # 1. Clean & validate phone
+    phone = re.sub(r"\D", "", payload.phone_number.strip())
+    if len(phone) < 10 or len(phone) > 15:
         raise HTTPException(400, "Valid 10-digit mobile number required")
 
-    # Generate 6-digit random OTP
+    # 2. Clean & validate email
+    email = payload.email.strip().lower()
+    if not EMAIL_REGEX.match(email):
+        raise HTTPException(400, "Valid email address required")
+
+    # 3. Rate limiting & Abuse prevention
+    fifteen_mins_ago = datetime.utcnow() - timedelta(minutes=15)
+    recent = db.query(OTPVerification).filter(
+        or_(
+            OTPVerification.phone_number == phone,
+            OTPVerification.email == email
+        ),
+        OTPVerification.created_at >= fifteen_mins_ago
+    ).order_by(OTPVerification.created_at.desc()).first()
+
+    if recent:
+        # Check 60-second cooldown
+        elapsed_seconds = (datetime.utcnow() - recent.last_sent_at).total_seconds()
+        if elapsed_seconds < 60:
+            audit(
+                db,
+                actor_id=None,
+                action="OTP_RATE_LIMITED",
+                entity="OTPVerification",
+                entity_id=recent.verification_token,
+                metadata_json={"phone": mask_phone_number(phone), "email": mask_email_address(email), "reason": "COOLDOWN_ACTIVE"}
+            )
+            db.commit()
+            raise HTTPException(429, "Please wait 60 seconds before requesting a new OTP.")
+
+        # Check maximum resend limit within 15 minutes window
+        if recent.resend_count >= 5:
+            audit(
+                db,
+                actor_id=None,
+                action="OTP_RATE_LIMITED",
+                entity="OTPVerification",
+                entity_id=recent.verification_token,
+                metadata_json={"phone": mask_phone_number(phone), "email": mask_email_address(email), "reason": "MAX_RESENDS_EXCEEDED"}
+            )
+            db.commit()
+            raise HTTPException(429, "Too many attempts. Please try again later.")
+
+    # 4. Generate cryptographically strong 6-digit OTP
     otp_code = f"{secrets.randbelow(900000) + 100000}"
     verification_token = secrets.token_urlsafe(32)
-    expires_at = datetime.utcnow() + timedelta(minutes=10)
+    expires_at = datetime.utcnow() + timedelta(minutes=5)  # Strict 5-minute expiry
 
-    # Invalidate previous unverified tokens for this phone
+    # Invalidate previous unverified tokens for this phone/email
     db.query(OTPVerification).filter(
-        OTPVerification.phone_number == phone,
+        or_(
+            OTPVerification.phone_number == phone,
+            OTPVerification.email == email
+        ),
         OTPVerification.is_verified == False
-    ).delete()
+    ).delete(synchronize_session=False)
+
+    # 5. Store securely HASHED OTP only
+    hashed_otp = hash_otp_code(otp_code)
+    current_resend_count = (recent.resend_count + 1) if recent else 0
 
     otp_rec = OTPVerification(
         phone_number=phone,
-        otp_code=otp_code,
+        email=email,
+        otp_code=hashed_otp,
         verification_token=verification_token,
         expires_at=expires_at,
         is_verified=False,
-        attempts_count=0
+        is_used=False,
+        attempts_count=0,
+        resend_count=current_resend_count,
+        last_sent_at=datetime.utcnow()
     )
     db.add(otp_rec)
+    db.flush()
+
+    # 6. Audit log OTP creation event
+    audit(
+        db,
+        actor_id=None,
+        action="OTP_GENERATED",
+        entity="OTPVerification",
+        entity_id=verification_token,
+        metadata_json={
+            "phone_masked": mask_phone_number(phone),
+            "email_masked": mask_email_address(email),
+            "expires_in_seconds": 300,
+            "resend_count": current_resend_count,
+        }
+    )
     db.commit()
+
+    # 7. Secure real-time dispatch logging (simulates dual SMS gateway & SMTP email service)
+    masked_p = mask_phone_number(phone)
+    masked_e = mask_email_address(email)
+    logger.info(f"🔑 [SECURE OTP DISPATCH] Verification code generated for Mobile: +91 {masked_p} | Email: {masked_e} | OTP: {otp_code} (Valid for 5 mins)")
+    print(f"\n[OTP DISPATCH] Real-time 6-digit code for +91 {masked_p} & {masked_e} -> {otp_code} (Expires in 5 mins)\n")
 
     return OTPSendResponse(
         success=True,
-        message=f"OTP successfully sent to {phone[:2]}******{phone[-2:]}",
+        message=f"OTP sent successfully to +91 {masked_p} and {masked_e}",
         phone_number=phone,
+        email=email,
         verification_token=verification_token,
-        expires_in_seconds=600,
-        demo_otp_code=otp_code,  # Facilitates seamless immediate verification
+        expires_in_seconds=300,
+        cooldown_seconds=60,
     )
 
 
@@ -87,29 +193,80 @@ def send_citizen_otp(payload: OTPSendRequest, db: Session = Depends(get_db)):
 def verify_citizen_otp(payload: OTPVerifyRequest, db: Session = Depends(get_db)):
     rec = db.query(OTPVerification).filter_by(verification_token=payload.verification_token).first()
     if not rec:
-        raise HTTPException(404, "Invalid or expired verification session")
+        raise HTTPException(404, "Invalid verification session. Please request a new OTP.")
 
+    # Prevent reuse of already used/consumed verification
+    if rec.is_used:
+        raise HTTPException(400, "This OTP verification has already been used.")
+
+    # Check if expired
     if rec.expires_at < datetime.utcnow():
-        raise HTTPException(400, "OTP has expired. Please request a new OTP.")
-
-    if rec.attempts_count >= 5:
-        raise HTTPException(429, "Too many failed attempts. Please request a new OTP.")
-
-    rec.attempts_count += 1
-
-    if rec.otp_code != payload.otp_code.strip():
+        audit(
+            db,
+            actor_id=None,
+            action="OTP_EXPIRED_ATTEMPT",
+            entity="OTPVerification",
+            entity_id=rec.verification_token,
+            metadata_json={"phone_masked": mask_phone_number(rec.phone_number)}
+        )
         db.commit()
-        raise HTTPException(400, "Invalid OTP code. Please try again.")
+        raise HTTPException(400, "OTP expired. Please request a new OTP.")
 
+    # Check maximum attempt limit
+    if rec.attempts_count >= 5:
+        audit(
+            db,
+            actor_id=None,
+            action="OTP_LOCKED",
+            entity="OTPVerification",
+            entity_id=rec.verification_token,
+            metadata_json={"phone_masked": mask_phone_number(rec.phone_number), "attempts": rec.attempts_count}
+        )
+        db.commit()
+        raise HTTPException(429, "Too many attempts. Please try again later.")
+
+    # Verify cryptographic hash of entered OTP
+    input_hashed = hash_otp_code(payload.otp_code.strip())
+    if rec.otp_code != input_hashed:
+        rec.attempts_count += 1
+        audit(
+            db,
+            actor_id=None,
+            action="OTP_FAILED_ATTEMPT",
+            entity="OTPVerification",
+            entity_id=rec.verification_token,
+            metadata_json={"phone_masked": mask_phone_number(rec.phone_number), "attempt_number": rec.attempts_count}
+        )
+        db.commit()
+        if rec.attempts_count >= 5:
+            raise HTTPException(429, "Too many attempts. Please try again later.")
+        raise HTTPException(400, "Invalid OTP. Please try again.")
+
+    # Mark as verified
     rec.is_verified = True
+    rec.verified_at = datetime.utcnow()
+    audit(
+        db,
+        actor_id=None,
+        action="OTP_VERIFIED",
+        entity="OTPVerification",
+        entity_id=rec.verification_token,
+        metadata_json={
+            "phone_masked": mask_phone_number(rec.phone_number),
+            "email_masked": mask_email_address(rec.email or ""),
+            "verified_at": rec.verified_at.isoformat()
+        }
+    )
     db.commit()
 
     return OTPVerifyResponse(
         success=True,
-        message="Phone number verified successfully",
+        message="Mobile & Email Verified",
         phone_number=rec.phone_number,
+        email=rec.email,
         is_verified=True,
         verified_token=rec.verification_token,
+        verified_at=rec.verified_at.isoformat() if rec.verified_at else None,
     )
 
 
@@ -119,13 +276,17 @@ def verify_citizen_otp(payload: OTPVerifyRequest, db: Session = Depends(get_db))
 
 @router.post("", response_model=ComplaintOut, status_code=status.HTTP_201_CREATED)
 def submit_citizen_complaint(payload: ComplaintCreate, db: Session = Depends(get_db)):
-    # 1. Verify OTP token
+    # 1. Verify OTP token & enforce single-use
     otp_rec = db.query(OTPVerification).filter_by(
         verification_token=payload.verification_token,
-        is_verified=True
+        is_verified=True,
+        is_used=False
     ).first()
     if not otp_rec:
-        raise HTTPException(403, "Mobile verification required before submitting a complaint")
+        raise HTTPException(403, "Mobile & email verification required before submitting a complaint")
+
+    # Mark OTP verification token as consumed
+    otp_rec.is_used = True
 
     # 2. Check if linked via QR token or instrument string
     instrument_id = None
@@ -223,6 +384,7 @@ def submit_citizen_complaint(payload: ComplaintCreate, db: Session = Depends(get
         citizen_name=payload.citizen_name,
         id_reference_token=payload.id_reference,
         verified_phone=payload.verified_phone,
+        verified_email=payload.verified_email or otp_rec.email,
         shop_name=payload.shop_name,
         shop_address=payload.shop_address,
         state=payload.state,

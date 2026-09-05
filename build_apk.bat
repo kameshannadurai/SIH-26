@@ -4,7 +4,9 @@ cd /d "%~dp0mobile"
 echo ========================================================
 echo   BUILDING FLUTTER ANDROID APK (RELEASE)
 echo ========================================================
-echo.
+
+set "JAVA_HOME=C:\Program Files\Android\Android Studio\jbr"
+set "PATH=C:\Program Files\Android\Android Studio\jbr\bin;%PATH%"
 
 call flutter build apk --release
 

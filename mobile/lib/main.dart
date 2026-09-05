@@ -204,6 +204,25 @@ class _LoginPageState extends State<LoginPage> {
               ),
               child: _busy ? const CircularProgressIndicator(color: Colors.white) : const Text('Sign In Securely', style: TextStyle(fontSize: 16)),
             ),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => QRScanPage(
+                      initialBaseUrl: _urlController.text.trim(),
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.qr_code_scanner, color: Color(0xFF0B559F)),
+              label: const Text('Scan QR / Verify Instrument Certificate', style: TextStyle(fontWeight: FontWeight.bold)),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                side: const BorderSide(color: Color(0xFF0B559F), width: 1.5),
+              ),
+            ),
           ],
         ),
       ),
@@ -408,10 +427,44 @@ class _TasksPageState extends State<TasksPage> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.qr_code_scanner),
+            tooltip: 'Scan QR / Verify Certificate',
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              final baseUrl = prefs.getString('api_url') ?? 'http://127.0.0.1:8000';
+              if (mounted) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => QRScanPage(initialBaseUrl: baseUrl),
+                  ),
+                );
+              }
+            },
+          ),
           IconButton(icon: const Icon(Icons.cloud_sync), tooltip: 'Sync Drafts', onPressed: _syncDrafts),
           IconButton(icon: const Icon(Icons.refresh), tooltip: 'Refresh', onPressed: _fetchData),
           IconButton(icon: const Icon(Icons.logout), tooltip: 'Logout', onPressed: _logout),
         ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () async {
+          final prefs = await SharedPreferences.getInstance();
+          final baseUrl = prefs.getString('api_url') ?? 'http://127.0.0.1:8000';
+          if (mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => QRScanPage(initialBaseUrl: baseUrl),
+              ),
+            );
+          }
+        },
+        icon: const Icon(Icons.qr_code_scanner),
+        label: const Text('Scan QR'),
+        backgroundColor: const Color(0xFF0B559F),
+        foregroundColor: Colors.white,
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -1084,3 +1137,987 @@ class _VerificationDetailPageState extends State<VerificationDetailPage> {
     );
   }
 }
+
+extension ListFilter on List<dynamic> {
+  List<dynamic> filterByQuery(String query) {
+    if (query.isEmpty) return this;
+    final q = query.toLowerCase();
+    return where((item) {
+      final appNum = (item['application_number'] ?? '').toString().toLowerCase();
+      final inst = item['instrument'] as Map<String, dynamic>?;
+      final instType = (inst?['instrument_type'] ?? '').toString().toLowerCase();
+      final owner = (inst?['owner_name'] ?? '').toString().toLowerCase();
+      final dist = (inst?['district'] ?? '').toString().toLowerCase();
+      return appNum.contains(q) || instType.contains(q) || owner.contains(q) || dist.contains(q);
+    }).toList();
+  }
+}
+
+// ==============================================================================
+// 1. DEDICATED QR SCANNER & TOKEN RESOLUTION PAGE
+// ==============================================================================
+class QRScanPage extends StatefulWidget {
+  final String initialBaseUrl;
+  const QRScanPage({super.key, required this.initialBaseUrl});
+
+  @override
+  State<QRScanPage> createState() => _QRScanPageState();
+}
+
+class _QRScanPageState extends State<QRScanPage> {
+  late TextEditingController _urlController;
+  final TextEditingController _tokenController = TextEditingController();
+  bool _busy = false;
+  String _errorMessage = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _urlController = TextEditingController(text: widget.initialBaseUrl.isNotEmpty ? widget.initialBaseUrl : 'http://127.0.0.1:8000');
+  }
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    _tokenController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _verifyToken(String inputToken) async {
+    final rawInput = inputToken.trim();
+    if (rawInput.isEmpty) {
+      setState(() => _errorMessage = 'Please enter or scan a QR code token.');
+      return;
+    }
+
+    // Extract identifier if full URL was scanned
+    String identifier = rawInput;
+    if (identifier.contains('/verify/')) {
+      identifier = identifier.split('/verify/').last;
+    }
+    identifier = Uri.decodeComponent(identifier);
+
+    setState(() {
+      _busy = true;
+      _errorMessage = '';
+    });
+
+    final baseUrl = _urlController.text.trim().replaceAll(RegExp(r'/+$'), '');
+
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/public/verify/${Uri.encodeComponent(identifier)}'),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final certData = jsonDecode(response.body);
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => PublicCertificateVerificationPage(
+                certificate: certData,
+                baseUrl: baseUrl,
+              ),
+            ),
+          );
+        }
+      } else {
+        final err = jsonDecode(response.body);
+        setState(() {
+          _errorMessage = err['detail'] ?? 'Certificate not found or invalid QR token.';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Network connection failed: $e\nEnsure backend server is running on $baseUrl';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Scan QR Code'),
+        backgroundColor: const Color(0xFF0B559F),
+        foregroundColor: Colors.white,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Scanner Viewfinder Card
+            Container(
+              padding: const EdgeInsets.all(28.0),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  Container(
+                    width: 140,
+                    height: 140,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: const Color(0xFF38BDF8), width: 3),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Center(
+                      child: Icon(Icons.qr_code_2_rounded, size: 90, color: Color(0xFF38BDF8)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'ScaleSync QR Verification',
+                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Point camera at instrument tamper-proof seal or digital certificate QR code',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Server URL field
+            TextField(
+              controller: _urlController,
+              decoration: const InputDecoration(
+                labelText: 'API Gateway Endpoint',
+                prefixIcon: Icon(Icons.dns),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Token input field
+            TextField(
+              controller: _tokenController,
+              decoration: InputDecoration(
+                labelText: 'Scanned QR Token or Certificate No.',
+                hintText: 'e.g. LM-CERT-2025-001 or paste /verify/... URL',
+                prefixIcon: const Icon(Icons.verified_outlined),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.arrow_forward_rounded, color: Color(0xFF0B559F)),
+                  onPressed: () => _verifyToken(_tokenController.text),
+                ),
+              ),
+              onSubmitted: _verifyToken,
+            ),
+            const SizedBox(height: 16),
+
+            if (_errorMessage.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  border: Border.all(color: Colors.red.shade200),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.error_outline, color: Colors.red),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(_errorMessage, style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                ),
+              ),
+
+            const SizedBox(height: 20),
+
+            ElevatedButton.icon(
+              onPressed: _busy ? null : () => _verifyToken(_tokenController.text),
+              icon: const Icon(Icons.search),
+              label: _busy
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Text('Verify Certificate Authenticity', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0B559F),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+
+            const SizedBox(height: 28),
+
+            // Quick Demo Barcode Simulation
+            const Text(
+              'QUICK DEMO QR SIMULATION:',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ActionChip(
+                  avatar: const Icon(Icons.qr_code, size: 16),
+                  label: const Text('Weighbridge Certificate'),
+                  onPressed: () {
+                    _tokenController.text = 'LM-CERT-2025-001';
+                    _verifyToken('LM-CERT-2025-001');
+                  },
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.qr_code, size: 16),
+                  label: const Text('Petrol Flowmeter'),
+                  onPressed: () {
+                    _tokenController.text = 'LM-CERT-2025-002';
+                    _verifyToken('LM-CERT-2025-002');
+                  },
+                ),
+                ActionChip(
+                  avatar: const Icon(Icons.qr_code, size: 16),
+                  label: const Text('Platform Counter Scale'),
+                  onPressed: () {
+                    _tokenController.text = 'LM-CERT-2025-003';
+                    _verifyToken('LM-CERT-2025-003');
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ==============================================================================
+// 2. PUBLIC CERTIFICATE DETAILS PAGE (SHOWS PUBLIC DATA ONLY + FILE COMPLAINT)
+// ==============================================================================
+class PublicCertificateVerificationPage extends StatelessWidget {
+  final Map<String, dynamic> certificate;
+  final String baseUrl;
+
+  const PublicCertificateVerificationPage({
+    super.key,
+    required this.certificate,
+    required this.baseUrl,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final status = (certificate['status'] ?? 'VALID').toString().toUpperCase();
+    final isValid = status == 'VALID';
+    final isRevoked = status == 'REVOKED';
+
+    final statusColor = isValid
+        ? const Color(0xFF16A34A)
+        : (isRevoked ? const Color(0xFFDC2626) : const Color(0xFFD97706));
+
+    final statusBg = isValid
+        ? const Color(0xFFDCFCE7)
+        : (isRevoked ? const Color(0xFFFEE2E2) : const Color(0xFFFEF3C7));
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Certificate Verification'),
+        backgroundColor: const Color(0xFF0B559F),
+        foregroundColor: Colors.white,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Status Header Banner
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: statusBg,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: statusColor.withOpacity(0.4), width: 1.5),
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    isValid ? Icons.verified_rounded : (isRevoked ? Icons.cancel_rounded : Icons.warning_amber_rounded),
+                    color: statusColor,
+                    size: 48,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    isValid ? 'GENUINE & VERIFIED' : (isRevoked ? 'CERTIFICATE REVOKED' : 'VERIFICATION EXPIRED'),
+                    style: TextStyle(color: statusColor, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    certificate['issuing_authority'] ?? 'Legal Metrology Department, Government of India',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: statusColor.withOpacity(0.85), fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Public Certificate Specs Card
+            Card(
+              elevation: 2,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: Padding(
+                padding: const EdgeInsets.all(18.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Public Verification Details',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF0B559F)),
+                    ),
+                    const Divider(height: 24),
+                    _buildDetailRow('Certificate Number', certificate['certificate_number'] ?? '—', isBold: true),
+                    _buildDetailRow('Instrument ID', certificate['instrument_id'] ?? '—'),
+                    _buildDetailRow('Type / Category', '${certificate['instrument_type'] ?? '—'} (${certificate['category'] ?? 'Standard'})'),
+                    _buildDetailRow('Manufacturer', '${certificate['manufacturer'] ?? '—'} ${certificate['model'] ?? ''}'),
+                    _buildDetailRow('Serial Number', certificate['serial_number'] ?? '—'),
+                    _buildDetailRow('Verification Date', certificate['verification_date'] ?? '—'),
+                    _buildDetailRow('Valid Until', certificate['valid_until'] ?? '—', isBold: true),
+                    if (certificate['owner_name'] != null)
+                      _buildDetailRow('Establishment', certificate['owner_name']),
+                    if (certificate['district'] != null)
+                      _buildDetailRow('Jurisdiction', '${certificate['district']}, ${certificate['state'] ?? 'Tamil Nadu'}'),
+                    _buildDetailRow(
+                      'Cryptographic Hash',
+                      certificate['certificate_hash_verified'] == true ? '✓ SHA-256 Valid (Tamper-Free)' : '✖ Hash Mismatch',
+                      valueColor: certificate['certificate_hash_verified'] == true ? Colors.green.shade700 : Colors.red,
+                    ),
+                    if (certificate['revocation_reason'] != null)
+                      _buildDetailRow('Revocation Note', certificate['revocation_reason'], valueColor: Colors.red),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 28),
+
+            // PRIMARY CALL TO ACTION: FILE COMPLAINT
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.red.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.gavel_rounded, color: Color(0xFFDC2626)),
+                      SizedBox(width: 8),
+                      Text(
+                        'Consumer Protection & Grievance',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFFDC2626)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Noticed short weights, tampered seals, or unverified measuring scales at this establishment?',
+                    style: TextStyle(fontSize: 13, color: Colors.black87),
+                  ),
+                  const SizedBox(height: 14),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => MobileCitizenComplaintPage(
+                            cert: certificate,
+                            baseUrl: baseUrl,
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.report_problem),
+                    label: const Text('⚖️ File Complaint / Report Violation', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFDC2626),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      elevation: 3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value, {bool isBold = false, Color? valueColor}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 130,
+            child: Text(label, style: const TextStyle(color: Colors.black54, fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isBold ? FontWeight.bold : FontWeight.w500,
+                color: valueColor ?? Colors.black87,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ==============================================================================
+// 3. MOBILE CITIZEN COMPLAINT WIZARD (WITH PRE-FILLED INFO & DUAL OTP)
+// ==============================================================================
+class MobileCitizenComplaintPage extends StatefulWidget {
+  final Map<String, dynamic> cert;
+  final String baseUrl;
+
+  const MobileCitizenComplaintPage({
+    super.key,
+    required this.cert,
+    required this.baseUrl,
+  });
+
+  @override
+  State<MobileCitizenComplaintPage> createState() => _MobileCitizenComplaintPageState();
+}
+
+class _MobileCitizenComplaintPageState extends State<MobileCitizenComplaintPage> {
+  int _step = 1; // 1: Citizen OTP, 2: Grievance Details, 3: Evidence & GPS, 4: Confirmed
+  bool _busy = false;
+  String _toast = '';
+
+  // Step 1: Citizen Identity & OTP
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _otpController = TextEditingController();
+  String _verificationToken = '';
+  bool _isVerified = false;
+
+  // Step 2: Violation & Shop Info (Pre-filled from scanned cert)
+  late TextEditingController _shopNameController;
+  late TextEditingController _shopAddressController;
+  late TextEditingController _districtController;
+  late TextEditingController _stateController;
+  String _violationType = 'Short Weight / Short Measure';
+  String _severity = 'MEDIUM';
+  late TextEditingController _descController;
+
+  // Step 3: GPS & Evidence
+  double? _latitude;
+  double? _longitude;
+  String _gpsStatus = '';
+  List<XFile> _evidencePhotos = [];
+
+  // Step 4: Submission Ticket
+  Map<String, dynamic>? _submittedTicket;
+
+  @override
+  void initState() {
+    super.initState();
+    final c = widget.cert;
+    _shopNameController = TextEditingController(text: c['owner_name'] ?? 'Commercial Shop / Merchant');
+    _shopAddressController = TextEditingController(text: c['owner_address'] ?? c['district'] ?? '');
+    _districtController = TextEditingController(text: c['district'] ?? 'Chennai');
+    _stateController = TextEditingController(text: c['state'] ?? 'Tamil Nadu');
+    _descController = TextEditingController(
+      text: 'Grievance regarding verified instrument: ${c['instrument_type'] ?? 'Scale'} (Cert: ${c['certificate_number'] ?? 'N/A'}, S/N: ${c['serial_number'] ?? 'N/A'}). Discrepancy observed in weights.',
+    );
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _phoneController.dispose();
+    _emailController.dispose();
+    _otpController.dispose();
+    _shopNameController.dispose();
+    _shopAddressController.dispose();
+    _districtController.dispose();
+    _stateController.dispose();
+    _descController.dispose();
+    super.dispose();
+  }
+
+  // Send OTP
+  Future<void> _sendOtp() async {
+    final phone = _phoneController.text.replaceAll(RegExp(r'\D'), '');
+    final email = _emailController.text.trim();
+
+    if (phone.length < 10) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter a valid 10-digit phone number.')));
+      return;
+    }
+    if (!email.contains('@')) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter a valid email address.')));
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      final res = await http.post(
+        Uri.parse('${widget.baseUrl}/complaints/otp/send'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'phone': phone,
+          'email': email,
+          'citizen_name': _nameController.text.trim(),
+        }),
+      );
+
+      if (res.statusCode == 200) {
+        final d = jsonDecode(res.body);
+        setState(() {
+          _verificationToken = d['verification_token'] ?? '';
+          _toast = d['message'] ?? 'OTP successfully dispatched to Mobile and Email.';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_toast)));
+      } else {
+        final err = jsonDecode(res.body);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err['detail'] ?? 'Failed to send OTP.')));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Network error: $e')));
+    } finally {
+      setState(() => _busy = false);
+    }
+  }
+
+  // Verify OTP
+  Future<void> _verifyOtp() async {
+    final phone = _phoneController.text.replaceAll(RegExp(r'\D'), '');
+    final otp = _otpController.text.trim();
+
+    if (otp.length != 6) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter complete 6-digit OTP code.')));
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      final res = await http.post(
+        Uri.parse('${widget.baseUrl}/complaints/otp/verify'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'phone': phone,
+          'otp': otp,
+          'verification_token': _verificationToken,
+        }),
+      );
+
+      if (res.statusCode == 200) {
+        setState(() {
+          _isVerified = true;
+          _step = 2; // Move to Step 2
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✓ Identity verified! Review establishment & violation details.')),
+        );
+      } else {
+        final err = jsonDecode(res.body);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err['detail'] ?? 'Invalid or expired OTP.')));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Network error: $e')));
+    } finally {
+      setState(() => _busy = false);
+    }
+  }
+
+  // Capture GPS
+  Future<void> _captureGps() async {
+    setState(() => _gpsStatus = 'Acquiring GPS coordinates…');
+    try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      setState(() {
+        _latitude = pos.latitude;
+        _longitude = pos.longitude;
+        _gpsStatus = 'Lat: ${_latitude!.toStringAsFixed(5)}, Lng: ${_longitude!.toStringAsFixed(5)}';
+      });
+    } catch (e) {
+      setState(() {
+        _latitude = 13.0827; // Default Chennai
+        _longitude = 80.2707;
+        _gpsStatus = 'Lat: 13.08270, Lng: 80.27070 (Simulated)';
+      });
+    }
+  }
+
+  // Pick Evidence Photo
+  Future<void> _pickEvidence() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.camera);
+    if (picked != null) {
+      setState(() {
+        _evidencePhotos.add(picked);
+      });
+    }
+  }
+
+  // Submit Complaint
+  Future<void> _submitComplaint() async {
+    setState(() => _busy = true);
+    final phone = _phoneController.text.replaceAll(RegExp(r'\D'), '');
+
+    try {
+      final res = await http.post(
+        Uri.parse('${widget.baseUrl}/complaints'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'citizen_name': _nameController.text.trim().isNotEmpty ? _nameController.text.trim() : 'Verified Citizen',
+          'citizen_phone': phone,
+          'citizen_email': _emailController.text.trim(),
+          'shop_name': _shopNameController.text.trim(),
+          'shop_address': _shopAddressController.text.trim(),
+          'state': _stateController.text.trim(),
+          'district': _districtController.text.trim(),
+          'violation_type': _violationType,
+          'complaint_category': 'INCORRECT_WEIGHT',
+          'severity': _severity,
+          'description': _descController.text.trim(),
+          'qr_token': widget.cert['qr_token'] ?? widget.cert['certificate_number'],
+          'latitude': _latitude ?? 13.0827,
+          'longitude': _longitude ?? 80.2707,
+          'verification_token': _verificationToken,
+        }),
+      );
+
+      if (res.statusCode == 200 || res.statusCode == 201) {
+        final ticket = jsonDecode(res.body);
+        setState(() {
+          _submittedTicket = ticket;
+          _step = 4;
+        });
+      } else {
+        final err = jsonDecode(res.body);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err['detail'] ?? 'Submission failed.')));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    } finally {
+      setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_step == 4 ? 'Grievance Registered' : 'File Grievance (Step $_step of 3)'),
+        backgroundColor: const Color(0xFF0B559F),
+        foregroundColor: Colors.white,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20.0),
+        child: _buildCurrentStep(),
+      ),
+    );
+  }
+
+  Widget _buildCurrentStep() {
+    switch (_step) {
+      case 1:
+        return _buildStep1Identity();
+      case 2:
+        return _buildStep2Violation();
+      case 3:
+        return _buildStep3Evidence();
+      case 4:
+        return _buildStep4Success();
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  // STEP 1: CITIZEN IDENTITY & OTP
+  Widget _buildStep1Identity() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEFF6FF),
+            border: Border.all(color: const Color(0xFFBFDBFE)),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.qr_code_2, color: Color(0xFF1D4ED8)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Pre-filled for: ${widget.cert['owner_name'] ?? 'Establishment'}\nInstrument: ${widget.cert['instrument_type'] ?? 'Scale'}',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF1E40AF)),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+        const Text('1. Verified Citizen Identity', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const Text(
+          'Under Legal Metrology Act 2009, consumer grievances require verified citizen contact credentials for real-time status dispatch.',
+          style: TextStyle(color: Colors.black54, fontSize: 13),
+        ),
+        const SizedBox(height: 18),
+        TextField(
+          controller: _nameController,
+          decoration: const InputDecoration(labelText: 'Citizen Full Name', prefixIcon: Icon(Icons.person)),
+        ),
+        const SizedBox(height: 14),
+        TextField(
+          controller: _phoneController,
+          keyboardType: TextInputType.phone,
+          maxLength: 10,
+          decoration: const InputDecoration(labelText: 'Mobile Phone Number *', prefixIcon: Icon(Icons.phone_android)),
+        ),
+        const SizedBox(height: 14),
+        TextField(
+          controller: _emailController,
+          keyboardType: TextInputType.emailAddress,
+          decoration: const InputDecoration(labelText: 'Email Address (For Status Alerts) *', prefixIcon: Icon(Icons.email)),
+        ),
+        const SizedBox(height: 16),
+
+        if (_verificationToken.isEmpty)
+          ElevatedButton.icon(
+            onPressed: _busy ? null : _sendOtp,
+            icon: const Icon(Icons.sms),
+            label: _busy ? const CircularProgressIndicator(color: Colors.white) : const Text('📲 Dispatch 6-Digit Secure OTP'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0B559F),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          )
+        else ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(8)),
+            child: const Text('✓ OTP sent to Mobile & Email. Enter 6-digit code below:'),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _otpController,
+            keyboardType: TextInputType.number,
+            maxLength: 6,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 8),
+            decoration: const InputDecoration(hintText: '• • • • • •'),
+          ),
+          const SizedBox(height: 14),
+          ElevatedButton.icon(
+            onPressed: _busy ? null : _verifyOtp,
+            icon: const Icon(Icons.check_circle),
+            label: _busy ? const CircularProgressIndicator(color: Colors.white) : const Text('✓ Verify OTP & Continue'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // STEP 2: VIOLATION DETAILS
+  Widget _buildStep2Violation() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('2. Commercial Shop & Violation', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 16),
+        TextField(controller: _shopNameController, decoration: const InputDecoration(labelText: 'Establishment / Merchant Name')),
+        const SizedBox(height: 12),
+        TextField(controller: _shopAddressController, decoration: const InputDecoration(labelText: 'Shop Location / Market Address')),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(child: TextField(controller: _districtController, decoration: const InputDecoration(labelText: 'District'))),
+            const SizedBox(width: 10),
+            Expanded(child: TextField(controller: _stateController, decoration: const InputDecoration(labelText: 'State'))),
+          ],
+        ),
+        const SizedBox(height: 16),
+        DropdownButtonFormField<String>(
+          value: _violationType,
+          decoration: const InputDecoration(labelText: 'Legal Metrology Violation Type'),
+          items: const [
+            DropdownMenuItem(value: 'Short Weight / Short Measure', child: Text('Short Weight / Short Measure')),
+            DropdownMenuItem(value: 'Tampered Verification Seal / Stamp', child: Text('Tampered Verification Seal')),
+            DropdownMenuItem(value: 'Unverified / Expired Instrument', child: Text('Unverified / Expired Scale')),
+            DropdownMenuItem(value: 'Incorrect Tare / Packaging Discrepancy', child: Text('Incorrect Tare Weight')),
+            DropdownMenuItem(value: 'Overcharging Above Standard MRP', child: Text('Overcharging / MRP Violation')),
+          ],
+          onChanged: (val) => setState(() => _violationType = val ?? _violationType),
+        ),
+        const SizedBox(height: 14),
+        TextField(
+          controller: _descController,
+          maxLines: 3,
+          decoration: const InputDecoration(labelText: 'Detailed Incident Statement *', hintText: 'Specify discrepancy details...'),
+        ),
+        const SizedBox(height: 24),
+        ElevatedButton(
+          onPressed: () => setState(() => _step = 3),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF0B559F),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+          ),
+          child: const Text('Next: Attach GPS & Evidence →'),
+        ),
+      ],
+    );
+  }
+
+  // STEP 3: GPS & EVIDENCE
+  Widget _buildStep3Evidence() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('3. Evidence & Geotag Verification', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.grey.shade300),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('📍 On-Site Geotag GPS (For LMO Inspection)', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Text(_gpsStatus.isNotEmpty ? _gpsStatus : 'Tap button to acquire GPS coordinates', style: const TextStyle(color: Colors.black54, fontSize: 12)),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: _captureGps,
+                icon: const Icon(Icons.my_location),
+                label: const Text('Acquire Accurate GPS Coordinates'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        OutlinedButton.icon(
+          onPressed: _pickEvidence,
+          icon: const Icon(Icons.camera_alt),
+          label: Text('Attach Evidence Photo (${_evidencePhotos.length} Attached)'),
+          style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
+        ),
+        const SizedBox(height: 28),
+        ElevatedButton.icon(
+          onPressed: _busy ? null : _submitComplaint,
+          icon: const Icon(Icons.gavel),
+          label: _busy ? const CircularProgressIndicator(color: Colors.white) : const Text('⚖️ Submit Grievance for Enforcement'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFDC2626),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // STEP 4: SUCCESS TICKET
+  Widget _buildStep4Success() {
+    final refNo = _submittedTicket?['complaint_number'] ?? 'COMP-2025-REG';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        const Icon(Icons.check_circle, size: 72, color: Color(0xFF16A34A)),
+        const SizedBox(height: 12),
+        const Text('Grievance Registered Successfully!', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF16A34A))),
+        const SizedBox(height: 6),
+        const Text('Auto-routed to the jurisdictional Legal Metrology Office.', textAlign: TextAlign.center, style: TextStyle(color: Colors.black54)),
+        const SizedBox(height: 24),
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade50,
+            border: Border.all(color: Colors.grey.shade300),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            children: [
+              _buildTicketRow('Reference Number', refNo, isPrimary: true),
+              const Divider(height: 20),
+              _buildTicketRow('Status', 'SUBMITTED (Pending Field Visit)'),
+              const Divider(height: 20),
+              _buildTicketRow('Jurisdiction', '${_districtController.text} Enforcement Division'),
+              const Divider(height: 20),
+              _buildTicketRow('Expected Response', 'Within 48 Working Hours'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 28),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(context),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF0B559F),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+          ),
+          child: const Text('Done & Return to App'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTicketRow(String label, String value, {bool isPrimary = false}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.black54, fontSize: 13, fontWeight: FontWeight.w600)),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: isPrimary ? 16 : 13,
+            fontWeight: FontWeight.bold,
+            color: isPrimary ? const Color(0xFF0B559F) : Colors.black87,
+          ),
+        ),
+      ],
+    );
+  }
+}
+

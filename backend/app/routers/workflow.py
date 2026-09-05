@@ -499,7 +499,11 @@ def resolve_public_certificate(db: Session, identifier: str, request: Request | 
         status=current_status,
         certificate_hash_verified=digest_ok,
         qr_token=c.qr_token,
-        revocation_reason=c.revocation_reason if c.status == "REVOKED" else None
+        revocation_reason=c.revocation_reason if c.status == "REVOKED" else None,
+        owner_name=instrument.owner_name,
+        owner_address=instrument.owner_address,
+        state=instrument.state,
+        district=instrument.district
     )
 
 

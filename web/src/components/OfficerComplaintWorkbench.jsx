@@ -32,8 +32,11 @@ export function OfficerComplaintWorkbench({ token, user }) {
   };
 
   useEffect(() => {
-    loadComplaints();
-  }, [statusFilter, token]);
+    const handler = setTimeout(() => {
+      loadComplaints();
+    }, 200);
+    return () => clearTimeout(handler);
+  }, [statusFilter, searchQuery, token]);
 
   const handleRecordAction = async (e) => {
     e.preventDefault();
@@ -66,13 +69,27 @@ export function OfficerComplaintWorkbench({ token, user }) {
 
       <header className="workforce-header">
         <div>
-          <h2>⚖️ Citizen Complaint Investigation Workbench</h2>
-          <p className="step-desc">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.35rem' }}>
+            <h2 style={{ margin: 0 }}>⚖️ Citizen Complaint Investigation Workbench</h2>
+            {user?.district && (
+              <span className="state-tag" style={{ fontSize: '0.78rem' }}>
+                📍 {user.district} District Jurisdiction
+              </span>
+            )}
+          </div>
+          <p className="step-desc" style={{ margin: 0 }}>
             Investigate reported consumer violations, unverified scales, short measures, and tampered weights in your jurisdiction ({user?.district || 'All Districts'}, {user?.state || 'State'}).
           </p>
         </div>
 
-        <div className="filter-controls-row">
+        <div className="filter-controls-row" style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <input
+            type="text"
+            placeholder="Search shop, complaint ID..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{ padding: '0.45rem 0.85rem', fontSize: '0.85rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', width: '220px' }}
+          />
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="">All Statuses</option>
             <option value="ASSIGNED">Assigned (New)</option>

@@ -25,12 +25,16 @@ def main():
     venv_py = BACKEND_DIR / "venv" / "Scripts" / "python.exe"
     venv_uvicorn = BACKEND_DIR / "venv" / "Scripts" / "uvicorn.exe"
     
-    if venv_uvicorn.exists():
-        backend_cmd = f'"{venv_uvicorn}" app.main:app --reload --host 127.0.0.1 --port 8000'
-    elif venv_py.exists():
-        backend_cmd = f'"{venv_py}" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000'
-    else:
-        backend_cmd = f'"{sys.executable}" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000'
+    python_to_use = str(sys.executable)
+    if venv_py.exists():
+        try:
+            test_res = subprocess.run([str(venv_py), "--version"], capture_output=True, timeout=3)
+            if test_res.returncode == 0:
+                python_to_use = str(venv_py)
+        except Exception:
+            pass
+
+    backend_cmd = f'"{python_to_use}" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000'
 
     print(f"\n[1/3] Starting FastAPI Backend on http://127.0.0.1:8000 ...")
     backend_proc = subprocess.Popen(backend_cmd, cwd=str(BACKEND_DIR), shell=True)

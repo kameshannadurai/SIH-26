@@ -24,7 +24,7 @@ export function PhoneMockupWrapper({ children, active, onToggle, darkMode }) {
           title="Switch to Mobile Phone Mockup View"
           style={{
             position: 'fixed',
-            bottom: '5.2rem',
+            bottom: '4.85rem',
             right: '1.5rem',
             zIndex: 9980,
             background: 'linear-gradient(135deg, #0f52ba 0%, #7c3aed 100%)',

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class OTPSendRequest(BaseModel):
     phone_number: str = Field(min_length=10, max_length=15)
+    email: str = Field(min_length=5, max_length=150)
     citizen_name: str | None = None
 
 
@@ -18,22 +19,25 @@ class OTPSendResponse(BaseModel):
     success: bool
     message: str
     phone_number: str
+    email: str
     verification_token: str
     expires_in_seconds: int = 300
-    demo_otp_code: str | None = None  # For seamless demo/testing without real SMS gateway
+    cooldown_seconds: int = 60
 
 
 class OTPVerifyRequest(BaseModel):
     verification_token: str
-    otp_code: str = Field(min_length=4, max_length=10)
+    otp_code: str = Field(min_length=6, max_length=6)
 
 
 class OTPVerifyResponse(BaseModel):
     success: bool
     message: str
     phone_number: str
+    email: str | None = None
     is_verified: bool
     verified_token: str
+    verified_at: str | None = None
 
 
 # ==============================================================================
@@ -44,6 +48,7 @@ class ComplaintCreate(BaseModel):
     citizen_name: str = Field(min_length=2, max_length=150)
     id_reference: str | None = Field(default=None, max_length=100)  # Masked Aadhaar / ID (e.g. XXXX-XXXX-1234)
     verified_phone: str = Field(min_length=10, max_length=30)
+    verified_email: str | None = Field(default=None, max_length=150)
     verification_token: str
     shop_name: str = Field(min_length=2, max_length=200)
     shop_address: str | None = None
@@ -93,6 +98,7 @@ class ComplaintOut(BaseModel):
     citizen_name: str
     id_reference_token: str | None = None
     verified_phone: str
+    verified_email: str | None = None
     shop_name: str
     shop_address: str | None = None
     state: str

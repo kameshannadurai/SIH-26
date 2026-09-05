@@ -1,8 +1,72 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../api/client';
+import { useTranslation } from '../i18n/LanguageContext';
 
-export function AIAssistantDrawer({ user, token, onNavigate, darkMode }) {
-  const [isOpen, setIsOpen] = useState(false);
+function renderFormattedMessage(text) {
+  if (!text) return null;
+  const str = typeof text === 'string' ? text : String(text);
+  const lines = str.split('\n');
+  return lines.map((line, idx) => {
+    // Check for bullet list item
+    const isBullet = line.trim().startsWith('- ') || line.trim().startsWith('• ') || line.trim().startsWith('* ');
+    const cleanedLine = isBullet ? line.trim().replace(/^[-•*]\s+/, '') : line;
+
+    // Simple parser for **bold** and `code`
+    const parts = [];
+    const regex = /(\*\*.*?\*\*|`.*?`)/g;
+    let lastIndex = 0;
+    let match;
+
+    while ((match = regex.exec(cleanedLine)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(cleanedLine.substring(lastIndex, match.index));
+      }
+      const raw = match[0];
+      if (raw.startsWith('**') && raw.endsWith('**')) {
+        parts.push(<strong key={match.index}>{raw.slice(2, -2)}</strong>);
+      } else if (raw.startsWith('`') && raw.endsWith('`')) {
+        parts.push(<code key={match.index} className="inline-code">{raw.slice(1, -1)}</code>);
+      }
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < cleanedLine.length) {
+      parts.push(cleanedLine.substring(lastIndex));
+    }
+
+    if (isBullet) {
+      return (
+        <li key={idx} style={{ marginLeft: '1.25rem', marginBottom: '0.35rem' }}>
+          {parts.length > 0 ? parts : cleanedLine}
+        </li>
+      );
+    }
+    if (cleanedLine.trim() === '') {
+      return <div key={idx} style={{ height: '0.6rem' }} />;
+    }
+    return (
+      <p key={idx} style={{ margin: '0 0 0.45rem' }}>
+        {parts.length > 0 ? parts : cleanedLine}
+      </p>
+    );
+  });
+}
+
+export function AIAssistantDrawer({ user, token, onNavigate, darkMode, isOpen: propIsOpen, onOpen, onClose, showFloatingButton = true }) {
+  const { t } = useTranslation();
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isOpen = propIsOpen !== undefined ? propIsOpen : internalOpen;
+  const [showPrompts, setShowPrompts] = useState(true);
+
+  const handleOpen = () => {
+    if (onOpen) onOpen();
+    else setInternalOpen(true);
+  };
+
+  const handleClose = () => {
+    if (onClose) onClose();
+    else setInternalOpen(false);
+  };
+
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -49,16 +113,16 @@ export function AIAssistantDrawer({ user, token, onNavigate, darkMode }) {
     ]
   };
 
+  const defaultWelcome = {
+    sender: 'ai',
+    text: `Hello ${user ? user.full_name : 'Citizen'}! I am your local **${roleTitles[role]}**.\n\nI can assist you with real-time status queries, Legal Metrology Act 2009 rules, GATC 2025 amendment standards, and verification tolerances.`,
+    quick_actions: []
+  };
+
   // Initial welcome message
   useEffect(() => {
     if (messages.length === 0) {
-      setMessages([
-        {
-          sender: 'ai',
-          text: `Hello ${user ? user.full_name : 'Citizen'}! I am your local **${roleTitles[role]}**.\n\nI can assist you with real-time status queries, Legal Metrology Act 2009 rules, GATC 2025 amendment standards, and verification tolerances.`,
-          quick_actions: []
-        }
-      ]);
+      setMessages([defaultWelcome]);
     }
   }, [user, role]);
 
@@ -67,6 +131,10 @@ export function AIAssistantDrawer({ user, token, onNavigate, darkMode }) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages, isOpen]);
+
+  const handleClear = () => {
+    setMessages([defaultWelcome]);
+  };
 
   const handleSend = async (queryText) => {
     const textToSend = queryText || input;
@@ -104,16 +172,16 @@ export function AIAssistantDrawer({ user, token, onNavigate, darkMode }) {
 
   return (
     <>
-      {/* Floating Copilot Launcher Button (Visible only when drawer is closed) */}
-      {!isOpen && (
+      {/* Floating Copilot Launcher Button */}
+      {showFloatingButton && !isOpen && (
         <button
           className="ai-copilot-btn"
-          onClick={() => setIsOpen(true)}
+          onClick={handleOpen}
           title="Open Legal Metrology Local AI Assistant"
           aria-label="Open AI Copilot"
         >
           <span className="ai-icon">🤖</span>
-          <span className="ai-label">AI Copilot</span>
+          <span className="ai-label">{t('ai_copilot')}</span>
         </button>
       )}
 
@@ -122,113 +190,149 @@ export function AIAssistantDrawer({ user, token, onNavigate, darkMode }) {
         <>
           <div
             className="ai-drawer-backdrop"
-            onClick={() => setIsOpen(false)}
+            onClick={handleClose}
             style={{
               position: 'fixed',
               top: 0,
               left: 0,
               right: 0,
               bottom: 0,
-              background: 'rgba(0, 0, 0, 0.4)',
+              background: 'rgba(0, 0, 0, 0.45)',
               zIndex: 9998,
-              backdropFilter: 'blur(2px)',
+              backdropFilter: 'blur(3px)',
             }}
           />
-          <aside className={`ai-drawer ${darkMode ? 'dark' : ''}`} style={{ zIndex: 9999 }}>
+          <aside className={`ai-drawer expanded ${darkMode ? 'dark' : ''}`} style={{ zIndex: 9999 }}>
             <header className="ai-drawer-header">
               <div className="ai-title-wrap">
-                <span className="ai-badge-role">{role}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                  <span className="ai-badge-role">{role}</span>
+                  <small className="ai-status-indicator">● Local Offline Intelligence</small>
+                </div>
                 <h3>{roleTitles[role]}</h3>
-                <small className="ai-status-indicator">● Local Offline Intelligence</small>
               </div>
-              <button className="icon-button" onClick={() => setIsOpen(false)} aria-label="Close Assistant">×</button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={handleClear}
+                  title="Clear conversation"
+                  style={{ fontSize: '0.85rem', padding: '0.4rem 0.65rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-muted)', cursor: 'pointer' }}
+                >
+                  🗑️
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={handleClose}
+                  aria-label="Close Assistant"
+                  style={{ fontSize: '1.25rem', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                >
+                  ✕
+                </button>
+              </div>
             </header>
 
-          {/* Quick Prompts Bar */}
-          <div className="ai-quick-prompts">
-            <span className="prompts-heading">Suggested Inquiries:</span>
-            <div className="prompts-scroll">
-              {(rolePrompts[role] || []).map((prompt, idx) => (
+            {/* Quick Prompts Bar */}
+            <div className="ai-quick-prompts">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showPrompts ? '0.6rem' : 0 }}>
+                <span className="prompts-heading" style={{ margin: 0 }}>Suggested Inquiries:</span>
                 <button
-                  key={idx}
-                  className="quick-prompt-pill"
-                  onClick={() => handleSend(prompt)}
-                  disabled={loading}
+                  type="button"
+                  onClick={() => setShowPrompts(!showPrompts)}
+                  style={{ background: 'none', border: 'none', color: 'var(--color-primary)', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}
                 >
-                  {prompt}
+                  {showPrompts ? 'Hide ▲' : 'Show Suggestions ▼'}
                 </button>
-              ))}
+              </div>
+              {showPrompts && (
+                <div className="prompts-scroll">
+                  {(rolePrompts[role] || []).map((prompt, idx) => (
+                    <button
+                      key={idx}
+                      className="quick-prompt-pill"
+                      onClick={() => handleSend(prompt)}
+                      disabled={loading}
+                    >
+                      💡 {prompt}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
 
-          {/* Messages Stream */}
-          <div className="ai-messages-container">
-            {messages.map((msg, index) => (
-              <div key={index} className={`ai-message-row ${msg.sender}`}>
-                <div className="ai-message-bubble">
-                  {msg.sender === 'ai' && <div className="ai-avatar">Gov AI</div>}
-                  <div className="ai-message-content">
-                    <p style={{ whiteSpace: 'pre-line' }}>{msg.text}</p>
-                    {msg.quick_actions && msg.quick_actions.length > 0 && (
-                      <div className="ai-actions-row">
-                        {msg.quick_actions.map((act, aIdx) => (
-                          <button
-                            key={aIdx}
-                            className="ai-action-btn"
-                            onClick={() => {
-                              setIsOpen(false);
-                              if (onNavigate) onNavigate(act.path);
-                            }}
-                          >
-                            ↗ {act.label}
-                          </button>
-                        ))}
+            {/* Messages Stream */}
+            <div className="ai-messages-container">
+              {messages.map((msg, index) => (
+                <div key={index} className={`ai-message-row ${msg.sender}`}>
+                  <div className="ai-message-bubble">
+                    {msg.sender === 'ai' && (
+                      <div className="ai-avatar">
+                        <span>🤖 Legal Metrology Intelligence</span>
                       </div>
                     )}
-                    {msg.disclaimer && (
-                      <div className="ai-disclaimer-tag">
-                        ⚖️ {msg.disclaimer}
-                      </div>
-                    )}
+                    <div className="ai-message-content">
+                      {renderFormattedMessage(msg.text)}
+                      {msg.quick_actions && msg.quick_actions.length > 0 && (
+                        <div className="ai-actions-row">
+                          {msg.quick_actions.map((act, aIdx) => (
+                            <button
+                              key={aIdx}
+                              className="ai-action-btn"
+                              onClick={() => {
+                                handleClose();
+                                if (onNavigate) onNavigate(act.path);
+                              }}
+                            >
+                              ↗ {act.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {msg.disclaimer && (
+                        <div className="ai-disclaimer-tag">
+                          ⚖️ {msg.disclaimer}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-            {loading && (
-              <div className="ai-message-row ai">
-                <div className="ai-message-bubble">
-                  <div className="ai-avatar">Gov AI</div>
-                  <div className="ai-typing-indicator">
-                    <span></span><span></span><span></span>
+              ))}
+              {loading && (
+                <div className="ai-message-row ai">
+                  <div className="ai-message-bubble">
+                    <div className="ai-avatar">🤖 Legal Metrology Intelligence</div>
+                    <div className="ai-typing-indicator">
+                      <span></span><span></span><span></span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
 
-          {/* Input Box */}
-          <form
-            className="ai-input-form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSend();
-            }}
-          >
-            <input
-              type="text"
-              placeholder={`Ask ${roleTitles[role]}...`}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              disabled={loading}
-            />
-            <button type="submit" className="primary" disabled={loading || !input.trim()}>
-              Send
-            </button>
-          </form>
-        </aside>
-      </>
-    )}
-  </>
-);
+            {/* Input Box */}
+            <form
+              className="ai-input-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSend();
+              }}
+            >
+              <input
+                type="text"
+                placeholder={`Ask ${roleTitles[role]} about compliance, rules, standards...`}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                disabled={loading}
+              />
+              <button type="submit" className="primary" disabled={loading || !input.trim()}>
+                Send Query →
+              </button>
+            </form>
+          </aside>
+        </>
+      )}
+    </>
+  );
 }

@@ -23,7 +23,17 @@ export async function request(path, { token, method = 'GET', body, headers = {} 
 
   const data = response.status === 204 ? null : await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.detail || data.message || 'Request failed. Please try again.');
+    let msg = 'Request failed. Please try again.';
+    if (typeof data?.detail === 'string') {
+      msg = data.detail;
+    } else if (Array.isArray(data?.detail)) {
+      msg = data.detail.map(e => e.msg || e.message || String(e)).join('; ');
+    } else if (data?.detail && typeof data.detail === 'object') {
+      msg = data.detail.msg || data.detail.message || JSON.stringify(data.detail);
+    } else if (typeof data?.message === 'string') {
+      msg = data.message;
+    }
+    throw new Error(msg);
   }
   return data;
 }
@@ -66,6 +76,7 @@ export const api = {
     f.append('file', file);
     return request(`/applications/${encodeURIComponent(num)}/documents`, { method: 'POST', body: f, token: t });
   },
+  routingDecision: (num, t) => request(`/applications/${encodeURIComponent(num)}/routing-decision`, { token: t }),
 
   // Assignments
   assignments: (t, params = {}) => request(`/assignments?${new URLSearchParams(params)}`, { token: t }),
@@ -113,7 +124,7 @@ export const api = {
   aiChat: (query, t, contextData = {}) => request('/ai/chat', { method: 'POST', body: { query, context_data: contextData }, token: t }),
 
   // Citizen Complaints Portal & OTP
-  sendOtp: (phone, name) => request('/complaints/otp/send', { method: 'POST', body: { phone_number: phone, citizen_name: name } }),
+  sendOtp: (phone, email, name) => request('/complaints/otp/send', { method: 'POST', body: { phone_number: phone, email: email, citizen_name: name } }),
   verifyOtp: (token, code) => request('/complaints/otp/verify', { method: 'POST', body: { verification_token: token, otp_code: code } }),
   submitComplaint: (b) => request('/complaints', { method: 'POST', body: b }),
   uploadComplaintEvidence: (complaintNum, file, evidenceType = 'PHOTO', lat, lng) => {

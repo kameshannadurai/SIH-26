@@ -64,14 +64,20 @@ def upgrade():
         'otp_verifications',
         sa.Column('id', sa.Integer(), primary_key=True),
         sa.Column('phone_number', sa.String(length=30), nullable=False),
-        sa.Column('otp_code', sa.String(length=10), nullable=False),
+        sa.Column('email', sa.String(length=150), nullable=True),
+        sa.Column('otp_code', sa.String(length=128), nullable=False),
         sa.Column('verification_token', sa.String(length=64), unique=True, nullable=False),
         sa.Column('expires_at', sa.DateTime(), nullable=False),
         sa.Column('is_verified', sa.Boolean(), default=False, nullable=False),
+        sa.Column('is_used', sa.Boolean(), default=False, nullable=False),
         sa.Column('attempts_count', sa.Integer(), default=0, nullable=False),
+        sa.Column('resend_count', sa.Integer(), default=0, nullable=False),
+        sa.Column('last_sent_at', sa.DateTime(), nullable=False),
+        sa.Column('verified_at', sa.DateTime(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False),
     )
     op.create_index('ix_otp_verifications_phone_number', 'otp_verifications', ['phone_number'])
+    op.create_index('ix_otp_verifications_email', 'otp_verifications', ['email'])
     op.create_index('ix_otp_verifications_token', 'otp_verifications', ['verification_token'])
 
     # 4. Shop Registry
@@ -108,6 +114,7 @@ def upgrade():
         sa.Column('citizen_name', sa.String(length=150), nullable=False),
         sa.Column('id_reference_token', sa.String(length=100), nullable=True),
         sa.Column('verified_phone', sa.String(length=30), nullable=False),
+        sa.Column('verified_email', sa.String(length=150), nullable=True),
         sa.Column('shop_name', sa.String(length=200), nullable=False),
         sa.Column('shop_address', sa.Text(), nullable=True),
         sa.Column('state', sa.String(length=100), nullable=False),

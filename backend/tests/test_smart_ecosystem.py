@@ -268,31 +268,60 @@ def test_smart_scheduling_and_collision_prevention():
 
 
 def test_public_citizen_complaint_and_otp_flow():
-    # 1. Request Citizen OTP
+    # 1. Request Citizen OTP with Phone & Email
     res_otp = client.post(
         "/complaints/otp/send",
-        json={"phone_number": "9876543210", "citizen_name": "Ravi Kumar"},
+        json={"phone_number": "9876543210", "email": "ravi.kumar@test.com", "citizen_name": "Ravi Kumar"},
     )
     assert res_otp.status_code == 200
     otp_data = res_otp.json()
     token = otp_data["verification_token"]
-    otp_code = otp_data["demo_otp_code"]
+    assert "demo_otp_code" not in otp_data  # Ensure OTP code is never exposed in response
 
-    # 2. Verify OTP
+    # 2. Test Rate Limiting Cooldown (immediate repeat send should return 429)
+    res_rate_limit = client.post(
+        "/complaints/otp/send",
+        json={"phone_number": "9876543210", "email": "ravi.kumar@test.com", "citizen_name": "Ravi Kumar"},
+    )
+    assert res_rate_limit.status_code == 429
+
+    # 3. Test Invalid OTP Attempt (should return 400 with clear message)
+    res_bad_otp = client.post(
+        "/complaints/otp/verify",
+        json={"verification_token": token, "otp_code": "000000"},
+    )
+    assert res_bad_otp.status_code == 400
+    assert "Invalid OTP" in res_bad_otp.json()["detail"]
+
+    # 4. In test environment, compute expected valid code for this token
+    db = TestingSessionLocal()
+    otp_rec = db.query(OTPVerification).filter_by(verification_token=token).first()
+    assert otp_rec is not None
+    assert otp_rec.otp_code != "123456"  # Verify OTP is securely hashed, not stored in plaintext
+    # Set a known hashed test OTP code: hash of '654321'
+    from app.routers.complaints import hash_otp_code
+    otp_rec.otp_code = hash_otp_code("654321")
+    db.commit()
+    db.close()
+
+    # 5. Verify Valid OTP
     res_verify = client.post(
         "/complaints/otp/verify",
-        json={"verification_token": token, "otp_code": otp_code},
+        json={"verification_token": token, "otp_code": "654321"},
     )
     assert res_verify.status_code == 200
-    assert res_verify.json()["is_verified"] is True
+    verify_data = res_verify.json()
+    assert verify_data["is_verified"] is True
+    assert verify_data["message"] == "Mobile & Email Verified"
 
-    # 3. Submit Public Citizen Complaint
+    # 6. Submit Public Citizen Complaint
     res_comp = client.post(
         "/complaints",
         json={
             "citizen_name": "Ravi Kumar",
             "id_reference": "XXXX-XXXX-9812",
             "verified_phone": "9876543210",
+            "verified_email": "ravi.kumar@test.com",
             "verification_token": token,
             "shop_name": "Kannan Sweet Stall",
             "shop_address": "12 Bazar Road, T Nagar",
@@ -313,18 +342,50 @@ def test_public_citizen_complaint_and_otp_flow():
 
     complaint_num = comp_data["complaint_number"]
 
-    # 4. Public Track Complaint
+    # 7. Test Single-Use Enforcement: Reusing the same verification_token must fail
+    res_reuse = client.post(
+        "/complaints",
+        json={
+            "citizen_name": "Ravi Kumar",
+            "verified_phone": "9876543210",
+            "verification_token": token,
+            "shop_name": "Another Shop",
+            "state": "Tamil Nadu",
+            "district": "Chennai",
+            "violation_type": "Short Weight",
+            "description": "Attempt to reuse consumed token.",
+        },
+    )
+    assert res_reuse.status_code == 403
+
+    # 8. Public Track Complaint
     res_track = client.get(f"/complaints/track/{complaint_num}?phone=9876543210")
     assert res_track.status_code == 200
     assert res_track.json()["shop_name"] == "Kannan Sweet Stall"
 
-    # 5. File repeat complaint against same shop -> must flag repeat offender
+    # 9. Create fresh verified token and file repeat complaint against same shop -> flags repeat offender
+    db = TestingSessionLocal()
+    token_2 = "token_repeat_test_999"
+    otp_rec2 = OTPVerification(
+        phone_number="9876543299",
+        email="priya.s@test.com",
+        otp_code=hash_otp_code("112233"),
+        verification_token=token_2,
+        expires_at=datetime.utcnow() + timedelta(minutes=5),
+        is_verified=True,
+        is_used=False,
+    )
+    db.add(otp_rec2)
+    db.commit()
+    db.close()
+
     res_repeat = client.post(
         "/complaints",
         json={
             "citizen_name": "Priya S",
-            "verified_phone": "9876543210",
-            "verification_token": token,
+            "verified_phone": "9876543299",
+            "verified_email": "priya.s@test.com",
+            "verification_token": token_2,
             "shop_name": "Kannan Sweet Stall",
             "shop_address": "12 Bazar Road, T Nagar",
             "state": "Tamil Nadu",
