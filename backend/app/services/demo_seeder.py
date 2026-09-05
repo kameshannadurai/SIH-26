@@ -225,7 +225,7 @@ def seed_demo_database(db: Session, force: bool = False) -> dict[str, int]:
             19.0760,
             72.8777,
             "GATC Apex Laboratory No. MH-GATC-001",
-            GATC_18_CATEGORIES,
+            list(GATC_18_CATEGORIES),
         ),
     ]
 
@@ -247,7 +247,7 @@ def seed_demo_database(db: Session, force: bool = False) -> dict[str, int]:
                 address=f"{name}, Industrial Estate, {district}, {state}",
                 latitude=lat,
                 longitude=lon,
-                role_specific_info={"accredited_categories": cats, "gatc_license_no": f"GATC-2025-{district.upper()[:3]}-09"},
+                role_specific_info={"accredited_categories": list(cats) if isinstance(cats, (set, tuple, list)) else cats, "gatc_license_no": f"GATC-2025-{district.upper()[:3]}-09"},
             )
             db.add(user)
             db.flush()
