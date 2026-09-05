@@ -2,11 +2,10 @@
 
 Algorithm: Priority-Aware Earliest Available Slot (PA-EAS).
 
-Requests are ordered by urgency (requested date / overdue request), then FCFS
-(created_at) as a fair tie-breaker. For each request, the algorithm chooses the
-earliest valid slot while preferring officers in the application's district,
-then state, and finally the wider officer pool. Officer daily capacity and
-existing booked/locked slots are respected.
+Requests are ordered by requested date and creation time (FCFS tie-breaker).
+For each request, the algorithm chooses the earliest valid slot while preferring
+an officer in the instrument's district, then state, then the wider pool.
+Officer daily capacity, breaks, weekends and booked/locked slots are respected.
 """
 from __future__ import annotations
 
@@ -39,9 +38,7 @@ def generate_slots(
     current = start
     while current + duration <= end:
         nxt = current + duration
-        overlaps_break = bool(
-            bstart and bend and not (nxt <= bstart or current >= bend)
-        )
+        overlaps_break = bool(bstart and bend and not (nxt <= bstart or current >= bend))
         if not overlaps_break:
             result.append((current.strftime(fmt), nxt.strftime(fmt)))
         current = nxt
@@ -90,42 +87,46 @@ def _candidate_slots(db: Session, officer: User, target_date: date) -> list[tupl
         start, end, duration = "09:00", "17:00", 60
         break_start, break_end, capacity = "13:00", "14:00", 8
 
-    booked_count = (
-        db.query(InspectionSlot)
-        .filter(
-            InspectionSlot.officer_id == officer.id,
-            InspectionSlot.slot_date == target_date,
-            InspectionSlot.status.in_(ACTIVE_SLOT_STATUSES),
-        )
-        .count()
+    booked_query = db.query(InspectionSlot).filter(
+        InspectionSlot.officer_id == officer.id,
+        InspectionSlot.slot_date == target_date,
+        InspectionSlot.status.in_(ACTIVE_SLOT_STATUSES),
     )
-    if booked_count >= capacity:
+    booked_slots = booked_query.all()
+    if len(booked_slots) >= capacity:
         return []
 
-    booked = {
-        (slot.start_time, slot.end_time)
-        for slot in db.query(InspectionSlot)
-        .filter(
-            InspectionSlot.officer_id == officer.id,
-            InspectionSlot.slot_date == target_date,
-            InspectionSlot.status.in_(ACTIVE_SLOT_STATUSES),
-        )
-        .all()
-    }
-    return [slot for slot in generate_slots(start, end, duration, break_start, break_end) if slot not in booked]
+    booked = {(slot.start_time, slot.end_time) for slot in booked_slots}
+    return [
+        slot for slot in generate_slots(start, end, duration, break_start, break_end)
+        if slot not in booked
+    ]
 
 
-def _officer_rank(officer: User, application: VerificationApplication, slot_date: date, slot_start: str, db: Session) -> tuple:
-    """Lower tuple wins: district match, state match, workload, date, time, id."""
+def _officer_rank(
+    officer: User,
+    application: VerificationApplication,
+    slot_date: date,
+    slot_start: str,
+    db: Session,
+) -> tuple:
+    """Lower tuple wins: jurisdiction, workload, date, time, officer id."""
     instrument = application.instrument
-    state_match = 0 if instrument and officer.full_name and False else 1
-    # Officer availability can carry a jurisdiction string such as "District, State".
+    district = (instrument.district or "").strip().lower() if instrument else ""
+    state = (instrument.state or "").strip().lower() if instrument else ""
+    officer_district = (officer.district or "").strip().lower()
+    officer_state = (officer.state or "").strip().lower()
+
     availability = _availability_for(db, officer.id, slot_date)
-    jurisdiction = (availability.location_jurisdiction or "").lower() if availability else ""
-    district = (instrument.district or "").lower() if instrument else ""
-    state = (instrument.state or "").lower() if instrument else ""
-    district_match = 0 if district and district in jurisdiction else 1
-    state_match = 0 if state and state in jurisdiction else 1
+    jurisdiction = (availability.location_jurisdiction or "").strip().lower() if availability else ""
+
+    district_match = 0 if (
+        district and (district == officer_district or district in jurisdiction)
+    ) else 1
+    state_match = 0 if (
+        state and (state == officer_state or state in jurisdiction)
+    ) else 1
+
     workload = (
         db.query(InspectionSlot)
         .filter(
@@ -139,7 +140,7 @@ def _officer_rank(officer: User, application: VerificationApplication, slot_date
 
 
 def request_priority(application: VerificationApplication) -> tuple:
-    """Priority queue key: requested date first, then FCFS creation time."""
+    """Priority queue key: requested date, then FCFS creation time, then id."""
     requested = application.requested_date or date.max
     return (requested, application.created_at or datetime.min, application.id)
 
@@ -160,17 +161,12 @@ def find_best_assignment(
     for officer in officers:
         for offset in range(max(1, horizon_days)):
             target_date = requested_date + timedelta(days=offset)
-            for start, end in _candidate_slots(db, officer, target_date):
+            slots = _candidate_slots(db, officer, target_date)
+            if slots:
+                start, end = slots[0]
                 candidates.append(
-                    (
-                        _officer_rank(officer, application, target_date, start, db),
-                        officer,
-                        target_date,
-                        start,
-                        end,
-                    )
+                    (_officer_rank(officer, application, target_date, start, db), officer, target_date, start, end)
                 )
-                # Earliest slot for an officer is enough; officer ranking handles tie-breaking.
                 break
 
     if not candidates:
