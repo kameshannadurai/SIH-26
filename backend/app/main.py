@@ -14,6 +14,7 @@ from app.routers.workflow import assignments, verifications, certificates, notif
 from app.routers.gatc_rules import router as gatc_rules_router
 from app.routers.complaints import router as complaints_router
 from app.routers.scheduling import router as scheduling_router
+from app.routers.auto_scheduling import router as auto_scheduling_router
 from app.routers.ai_chat import router as ai_chat_router
 from app.utils.security import hash_password
 
@@ -80,6 +81,7 @@ app.include_router(admin.router)
 app.include_router(gatc_rules_router)
 app.include_router(complaints_router)
 app.include_router(scheduling_router)
+app.include_router(auto_scheduling_router)
 app.include_router(ai_chat_router)
 app.include_router(storage_router)
 app.add_middleware(
@@ -117,69 +119,3 @@ def database_test(db: Session = Depends(get_db)):
         "database": "connected",
         "test": result,
     }
-
-
-@app.get("/api/seed-demo")
-def seed_demo_endpoint(db: Session = Depends(get_db)):
-    try:
-        from app.services.demo_seeder import seed_demo_database
-        res = seed_demo_database(db, force=True)
-        return {"status": "success", "result": res}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-# ==============================================================================
-# SPA FRONTEND & STATIC ASSETS SERVING (FOR UNIFIED RENDER PRODUCTION CONTAINER)
-# ==============================================================================
-
-def find_web_dist_dir() -> Path | None:
-    candidates = [
-        Path(__file__).resolve().parent.parent / "web_dist",
-        Path("/app/app_backend/web_dist"),
-        Path("/app/web_dist"),
-        Path(__file__).resolve().parents[2] / "web" / "dist",
-        Path("web_dist"),
-    ]
-    for p in candidates:
-        if p.exists() and (p / "index.html").exists():
-            return p
-    return None
-
-
-WEB_DIST_DIR = find_web_dist_dir()
-
-if WEB_DIST_DIR:
-    # Mount assets folder for bundled JS, CSS, images
-    assets_dir = WEB_DIST_DIR / "assets"
-    if assets_dir.exists():
-        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
-
-    # Serve direct static files from dist or fall back to SPA index.html
-    @app.get("/{full_path:path}", include_in_schema=False)
-    async def serve_spa_frontend(full_path: str):
-        # Exclude backend API routes, documentation and health endpoints
-        api_prefixes = (
-            "api", "auth", "instruments", "applications", "assignments",
-            "verifications", "certificates", "notifications", "enforcement",
-            "public", "admin", "gatc-rules", "complaints", "scheduling",
-            "ai", "storage", "health", "database-test", "docs", "openapi.json", "redoc"
-        )
-        if full_path.startswith(api_prefixes):
-            return JSONResponse(status_code=404, content={"detail": "Not Found"})
-
-        # Direct file check (e.g. favicon.ico, logo.png, robots.txt)
-        file_path = WEB_DIST_DIR / full_path
-        if full_path and file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
-
-        # Fallback to SPA index.html for client-side routing
-        return FileResponse(WEB_DIST_DIR / "index.html")
-else:
-    @app.get("/", include_in_schema=False)
-    def root():
-        return {
-            "message": "Legal Metrology API is running",
-            "status": "success",
-            "frontend": "standalone mode"
-        }
