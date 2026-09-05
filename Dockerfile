@@ -1,15 +1,20 @@
 # Multi-Stage Production Dockerfile for ScaleSync Legal Metrology Platform
 
 # Stage 1: Build React/Vite Frontend
-FROM node:20-alpine AS frontend-builder
+FROM node:20-slim AS frontend-builder
 WORKDIR /app/web
 
-# Install frontend dependencies
+# Copy package descriptors and install dependencies in Linux environment
 COPY web/package*.json ./
 RUN npm install
 
-# Copy frontend source and compile production bundle
-COPY web/ ./
+# Copy frontend source code (ignoring local node_modules via .dockerignore)
+COPY web/src/ ./src/
+COPY web/public/ ./public/
+COPY web/index.html ./index.html
+COPY web/vite.config.js ./vite.config.js
+
+# Build production bundle
 RUN npm run build
 
 # Stage 2: Production Python Backend + Static Web Serving
